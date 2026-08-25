@@ -7,6 +7,7 @@ import ForemanReport from "./pages/ForemanReport";
 import QsReport from "./pages/QsReport";
 import SheReport from "./pages/SheReport";
 import StoresReport from "./pages/StoresReport";
+import FinanceReport from "./pages/FinanceReport";
 
 export default function App() {
   return (
@@ -51,6 +52,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <StoresReport />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/reports/finance"
+            element={
+              <ProtectedRoute>
+                <FinanceReport />
               </ProtectedRoute>
             }
           />

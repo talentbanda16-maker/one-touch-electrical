@@ -71,6 +71,7 @@ async function seedDemoProjectAndForeman() {
   await seedDemoRoleUser(project, "QS", "qs@onetouchelectrical.com", "Demo QS");
   await seedDemoRoleUser(project, "SHE_OFFICER", "she@onetouchelectrical.com", "Demo SHE Officer");
   await seedDemoRoleUser(project, "STORESMAN", "stores@onetouchelectrical.com", "Demo Storesman");
+  await seedDemoRoleUser(project, "FINANCE", "finance@onetouchelectrical.com", "Demo Finance");
 }
 
 async function seedDemoRoleUser(project, role, email, name) {

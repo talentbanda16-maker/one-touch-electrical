@@ -163,6 +163,7 @@ model Report {
   qsDetail      QsReportDetail?
   sheDetail     SheReportDetail?
   storesDetail  StoresReportDetail?
+  financeDetail FinanceReportDetail?
   attachments   Attachment[]
 
   @@map("reports")
@@ -310,4 +311,54 @@ model StockTransactionLine {
   storesReportDetail StoresReportDetail @relation(fields: [storesReportDetailId], references: [id], onDelete: Cascade)
 
   @@map("stock_transaction_lines")
+}
+
+// ---------- Finance (per spec Section 10) ----------
+
+enum FinanceLineType {
+  FUNDS_RECEIVED
+  EXPENDITURE
+  COMMITMENT
+}
+
+enum FinanceCategory {
+  ADVANCE_PAYMENT
+  OTHER_FUNDS
+  MATERIALS
+  LABOUR
+  PLANT_EQUIPMENT
+  TRANSPORT_LOGISTICS
+  SUBCONTRACTOR
+  SUPPLIER
+  PETTY_CASH
+  OTHER
+}
+
+model FinanceReportDetail {
+  id       String  @id @default(uuid())
+  reportId String  @unique
+  comments String?
+
+  report Report                  @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  lines  FinanceTransactionLine[]
+
+  @@map("finance_report_details")
+}
+
+// Project-wide totals (total funds received, actual expenditure to
+// date, balance available, fund utilisation %) are rollups across every
+// approved Finance report over the project's life — spec 9.3 dashboard/
+// analytics work for a later step, not computed from one submission.
+model FinanceTransactionLine {
+  id                    String           @id @default(uuid())
+  financeReportDetailId String
+  type                  FinanceLineType
+  category              FinanceCategory
+  amount                Decimal          @db.Decimal(14, 2)
+  description           String?
+  paymentReference      String?
+
+  financeReportDetail FinanceReportDetail @relation(fields: [financeReportDetailId], references: [id], onDelete: Cascade)
+
+  @@map("finance_transaction_lines")
 }

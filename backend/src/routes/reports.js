@@ -444,4 +444,125 @@ router.get("/stores/:id", requireAuth, async (req, res) => {
   res.json(report);
 });
 
+const FINANCE_LINE_TYPES = ["FUNDS_RECEIVED", "EXPENDITURE", "COMMITMENT"];
+const FINANCE_CATEGORIES = [
+  "ADVANCE_PAYMENT",
+  "OTHER_FUNDS",
+  "MATERIALS",
+  "LABOUR",
+  "PLANT_EQUIPMENT",
+  "TRANSPORT_LOGISTICS",
+  "SUBCONTRACTOR",
+  "SUPPLIER",
+  "PETTY_CASH",
+  "OTHER",
+];
+
+const financeLineSchema = z.object({
+  type: z.enum(FINANCE_LINE_TYPES),
+  category: z.enum(FINANCE_CATEGORIES),
+  amount: z.number().nonnegative(),
+  description: z.string().optional(),
+  paymentReference: z.string().optional(),
+});
+
+const financeSchema = z.object({
+  projectId: z.string().uuid(),
+  reportDate: z.string().date(),
+  submissionId: z.string().min(1),
+  comments: z.string().optional(),
+  lines: z.array(financeLineSchema).min(1, "At least one transaction line is required"),
+});
+
+router.post(
+  "/finance",
+  requireAuth,
+  requireRole("FINANCE"),
+  requireProjectAccess,
+  async (req, res) => {
+    const parsed = financeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+    const { projectId, reportDate, submissionId, comments, lines } = parsed.data;
+
+    const existing = await prisma.report.findUnique({
+      where: { submissionId },
+      include: { financeDetail: { include: { lines: true } } },
+    });
+    if (existing) {
+      return res.status(200).json(existing);
+    }
+
+    const report = await prisma.report.create({
+      data: {
+        projectId,
+        type: "FINANCE",
+        reportDate: new Date(reportDate),
+        submittedById: req.user.id,
+        submissionId,
+        financeDetail: {
+          create: {
+            comments,
+            lines: { create: lines },
+          },
+        },
+      },
+      include: { financeDetail: { include: { lines: true } } },
+    });
+
+    await recordAudit({
+      userId: req.user.id,
+      action: "REPORT_SUBMITTED",
+      entityType: "Report",
+      entityId: report.id,
+      metadata: { type: "FINANCE", projectId, lineCount: lines.length },
+    });
+
+    res.status(201).json(report);
+  }
+);
+
+router.get("/finance", requireAuth, requireProjectAccess, async (req, res) => {
+  const { projectId } = req.query;
+  if (!projectId) return res.status(400).json({ error: "projectId is required" });
+
+  const where = { projectId, type: "FINANCE" };
+  if (req.user.role === "FINANCE") {
+    where.submittedById = req.user.id;
+  }
+
+  const reports = await prisma.report.findMany({
+    where,
+    include: {
+      financeDetail: { include: { lines: true } },
+      submittedBy: { select: { id: true, name: true } },
+    },
+    orderBy: { reportDate: "desc" },
+  });
+  res.json(reports);
+});
+
+router.get("/finance/:id", requireAuth, async (req, res) => {
+  const report = await prisma.report.findUnique({
+    where: { id: req.params.id },
+    include: {
+      financeDetail: { include: { lines: true } },
+      submittedBy: { select: { id: true, name: true } },
+    },
+  });
+  if (!report) return res.status(404).json({ error: "Report not found" });
+
+  if (req.user.role !== "TECHNICAL_MANAGER" && req.user.role !== "MANAGEMENT") {
+    const assignment = await prisma.projectAssignment.findFirst({
+      where: { userId: req.user.id, projectId: report.projectId },
+    });
+    if (!assignment && report.submittedById !== req.user.id) {
+      return res.status(403).json({ error: "Not permitted to view this report" });
+    }
+  }
+
+  res.json(report);
+});
+
 module.exports = router;
