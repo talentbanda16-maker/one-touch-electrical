@@ -60,6 +60,7 @@ model User {
   refreshTokens RefreshToken[]
   auditLogs     AuditLog[]
   reports       Report[]
+  attachments   Attachment[]
 
   @@map("users")
 }
@@ -81,6 +82,7 @@ model Project {
 
   assignments ProjectAssignment[]
   reports     Report[]
+  attachments Attachment[]
 
   @@map("projects")
 }
@@ -159,8 +161,32 @@ model Report {
 
   foremanDetail ForemanReportDetail?
   qsDetail      QsReportDetail?
+  attachments   Attachment[]
 
   @@map("reports")
+}
+
+// Photos/documents. reportId is required for now since Report is the
+// only parent type that exists yet — spec Section 19 also allows
+// instruction/action/finance-line parents, added when those tables exist.
+// storageKey is a relative path today (local disk); swapping to S3
+// later only changes how storageKey is resolved to bytes, not this table.
+model Attachment {
+  id           String   @id @default(uuid())
+  reportId     String
+  projectId    String
+  fileName     String
+  storageKey   String
+  mimeType     String
+  fileSize     Int
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  report     Report  @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  project    Project @relation(fields: [projectId], references: [id])
+  uploadedBy User    @relation(fields: [uploadedById], references: [id])
+
+  @@map("attachments")
 }
 
 model ForemanReportDetail {

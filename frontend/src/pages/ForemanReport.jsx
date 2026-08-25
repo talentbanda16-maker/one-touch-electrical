@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { api } from "../api";
+import { api, getAccessToken } from "../api";
 
 const EMPTY_FORM = {
   reportDate: new Date().toISOString().slice(0, 10),
@@ -33,6 +33,7 @@ export default function ForemanReport() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [stagedPhotos, setStagedPhotos] = useState([]); // [{ file, previewUrl }]
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -50,6 +51,36 @@ export default function ForemanReport() {
     setForm((f) => ({ ...f, [field]: value }));
   }
 
+  function handlePhotoSelect(e) {
+    const files = Array.from(e.target.files || []);
+    setStagedPhotos((current) => [
+      ...current,
+      ...files.map((file) => ({ file, previewUrl: URL.createObjectURL(file) })),
+    ]);
+    e.target.value = "";
+  }
+
+  function removeStagedPhoto(index) {
+    setStagedPhotos((current) => {
+      URL.revokeObjectURL(current[index].previewUrl);
+      return current.filter((_, i) => i !== index);
+    });
+  }
+
+  async function uploadPhoto(reportId, file) {
+    const formData = new FormData();
+    formData.append("photo", file);
+    const res = await fetch(`/api/reports/${reportId}/attachments`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${getAccessToken()}` },
+      body: formData,
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || "Photo upload failed");
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
@@ -60,8 +91,26 @@ export default function ForemanReport() {
       for (const field of NUMBER_FIELDS) {
         body[field] = Number(body[field]) || 0;
       }
-      await api.post("/reports/foreman", body);
-      setSuccess("Report submitted.");
+      const report = await api.post("/reports/foreman", body);
+
+      // Report data is already saved at this point — a photo failure below
+      // doesn't lose the report, it just leaves that one photo unattached.
+      let photoFailures = 0;
+      for (const { file } of stagedPhotos) {
+        try {
+          await uploadPhoto(report.id, file);
+        } catch {
+          photoFailures++;
+        }
+      }
+
+      stagedPhotos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+      setStagedPhotos([]);
+      setSuccess(
+        photoFailures > 0
+          ? `Report submitted, but ${photoFailures} photo(s) failed to upload — try adding them again from "Recent reports" below.`
+          : "Report submitted."
+      );
       setForm(EMPTY_FORM);
     } catch (err) {
       setError(err.message || "Failed to submit report");
@@ -210,6 +259,37 @@ export default function ForemanReport() {
           <TextArea label="Problems, delays and constraints" value={form.constraints} onChange={(v) => updateField("constraints", v)} />
           <TextArea label="Instructions received" value={form.instructionsReceived} onChange={(v) => updateField("instructionsReceived", v)} />
           <TextArea label="Planned activities for tomorrow" value={form.nextDayPlan} onChange={(v) => updateField("nextDayPlan", v)} />
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Site photographs</label>
+            {stagedPhotos.length > 0 && (
+              <div className="grid grid-cols-3 gap-2 mb-2">
+                {stagedPhotos.map((p, i) => (
+                  <div key={i} className="relative aspect-square bg-slate-100 rounded-md overflow-hidden">
+                    <img src={p.previewUrl} alt="" className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => removeStagedPhoto(i)}
+                      className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-6 h-6 text-xs"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <label className="block w-full text-center border border-dashed border-slate-300 rounded-md py-3 text-sm text-slate-600">
+              + Add photo
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                onChange={handlePhotoSelect}
+                className="hidden"
+              />
+            </label>
+          </div>
 
           <button
             type="submit"

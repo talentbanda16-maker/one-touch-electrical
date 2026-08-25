@@ -4,6 +4,10 @@ export function setAccessToken(token) {
   accessToken = token;
 }
 
+export function getAccessToken() {
+  return accessToken;
+}
+
 async function request(path, { method = "GET", body, retry = true } = {}) {
   const res = await fetch(`/api${path}`, {
     method,
