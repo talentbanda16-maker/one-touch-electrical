@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Enums ----------
+
+enum Role {
+  TECHNICAL_MANAGER
+  FOREMAN
+  QS
+  SHE_OFFICER
+  STORESMAN
+  FINANCE
+  MANAGEMENT
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  DELAYED
+  COMPLETED
+  CLOSED
+}
+
+// ---------- Core models (Step 1: Foundation) ----------
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assignments   ProjectAssignment[]
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+model Project {
+  id                String        @id @default(uuid())
+  name              String
+  code              String        @unique
+  client            String?
+  mainContractor    String?
+  location          String?
+  contractValue     Decimal?      @db.Decimal(14, 2)
+  approvedBudget    Decimal?      @db.Decimal(14, 2)
+  startDate         DateTime?
+  plannedEndDate    DateTime?
+  status            ProjectStatus @default(PLANNING)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  assignments ProjectAssignment[]
+
+  @@map("projects")
+}
+
+// Links a user to a project in a specific role on that project.
+// A user's system-wide Role (above) is their job title; this join
+// table is what "assigned projects" actually means for RBAC checks.
+model ProjectAssignment {
+  id        String   @id @default(uuid())
+  userId    String
+  projectId String
+  role      Role
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId, role])
+  @@map("project_assignments")
+}
+
+// ---------- Auth support ----------
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  revoked   Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+// ---------- Audit trail (append-only, per spec section 1.4/9) ----------
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("audit_logs")
+}
