@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 const ROLE_LABELS = {
@@ -12,6 +13,7 @@ const ROLE_LABELS = {
 
 export default function Dashboard() {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -30,9 +32,20 @@ export default function Dashboard() {
         </button>
       </header>
 
-      <main className="p-4">
+      <main className="p-4 space-y-4">
+        {user?.role === "FOREMAN" && (
+          <button
+            onClick={() => navigate("/reports/foreman")}
+            className="w-full bg-blue-600 text-white rounded-xl py-4 text-base font-medium"
+          >
+            Submit daily report
+          </button>
+        )}
+
         <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-slate-500">
-          Role-specific reporting forms and dashboards land in Step 2–4.
+          {user?.role === "FOREMAN"
+            ? "QS, SHE, Stores and Finance forms land next in Step 2."
+            : "Role-specific reporting forms and dashboards land in Step 2–4."}
           <br />
           Foundation (login, roles, projects) is working.
         </div>

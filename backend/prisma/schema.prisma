@@ -27,6 +27,23 @@ enum ProjectStatus {
   CLOSED
 }
 
+enum ReportType {
+  FOREMAN
+  QS
+  SHE
+  STORES
+  FINANCE
+}
+
+// DRAFT/RETURNED are for the Step 3 approval workflow; Step 2 reports
+// are created straight into SUBMITTED.
+enum ReportStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  RETURNED
+}
+
 // ---------- Core models (Step 1: Foundation) ----------
 
 model User {
@@ -42,6 +59,7 @@ model User {
   assignments   ProjectAssignment[]
   refreshTokens RefreshToken[]
   auditLogs     AuditLog[]
+  reports       Report[]
 
   @@map("users")
 }
@@ -62,6 +80,7 @@ model Project {
   updatedAt         DateTime      @updatedAt
 
   assignments ProjectAssignment[]
+  reports     Report[]
 
   @@map("projects")
 }
@@ -112,4 +131,56 @@ model AuditLog {
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@map("audit_logs")
+}
+
+// ---------- Reports (Step 2: role-specific reporting) ----------
+
+// Shared header for every department report. Department-specific data
+// lives in the linked *ReportDetail table (one-to-one). This is what
+// lets the Step 5/6 combined-report query pull "everything approved
+// for project X between two dates" with one query across all types.
+model Report {
+  id            String       @id @default(uuid())
+  projectId     String
+  type          ReportType
+  reportDate    DateTime     @db.Date
+  status        ReportStatus @default(SUBMITTED)
+  submittedById String
+  // Client-generated key so a retried offline-sync submission never
+  // creates a duplicate report — the API treats a repeat submissionId
+  // as "already have this one" instead of inserting again.
+  submissionId  String       @unique
+  submittedAt   DateTime     @default(now())
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  project     Project @relation(fields: [projectId], references: [id])
+  submittedBy User    @relation(fields: [submittedById], references: [id])
+
+  foremanDetail ForemanReportDetail?
+
+  @@map("reports")
+}
+
+model ForemanReportDetail {
+  id                  String  @id @default(uuid())
+  reportId            String  @unique
+  siteLocation        String?
+  workersOnSite        Int     @default(0)
+  labourSkilled        Int     @default(0)
+  labourUnskilled      Int     @default(0)
+  labourSubcontractor  Int     @default(0)
+  workCompleted        String?
+  workInProgress       String?
+  percentProgress      Int     @default(0)
+  equipmentUsed        String?
+  materialsUsed        String?
+  materialsRequired    String?
+  constraints          String?
+  instructionsReceived String?
+  nextDayPlan          String?
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@map("foreman_report_details")
 }

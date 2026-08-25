@@ -20,7 +20,7 @@ async function requireProjectAccess(req, res, next) {
   if (!req.user) return res.status(401).json({ error: "Not authenticated" });
   if (req.user.role === "TECHNICAL_MANAGER") return next();
 
-  const projectId = req.params.projectId || req.body.projectId;
+  const projectId = req.params.projectId || req.body.projectId || req.query.projectId;
   if (!projectId) return res.status(400).json({ error: "projectId is required" });
 
   const assignment = await prisma.projectAssignment.findFirst({
