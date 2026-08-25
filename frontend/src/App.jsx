@@ -8,6 +8,7 @@ import QsReport from "./pages/QsReport";
 import SheReport from "./pages/SheReport";
 import StoresReport from "./pages/StoresReport";
 import FinanceReport from "./pages/FinanceReport";
+import Approvals from "./pages/Approvals";
 
 export default function App() {
   return (
@@ -60,6 +61,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <FinanceReport />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/approvals"
+            element={
+              <ProtectedRoute>
+                <Approvals />
               </ProtectedRoute>
             }
           />

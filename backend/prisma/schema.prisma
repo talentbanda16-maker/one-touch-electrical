@@ -60,6 +60,8 @@ model User {
   refreshTokens RefreshToken[]
   auditLogs     AuditLog[]
   reports       Report[]
+  reviewedReports Report[] @relation("ReportReviewer")
+  reportRevisionsReturned ReportRevision[] @relation("ReportRevisionReturnedBy")
   attachments   Attachment[]
 
   @@map("users")
@@ -153,11 +155,16 @@ model Report {
   // as "already have this one" instead of inserting again.
   submissionId  String       @unique
   submittedAt   DateTime     @default(now())
+  // Set on approve/return; null while still SUBMITTED.
+  reviewedById  String?
+  reviewedAt    DateTime?
+  returnReason  String?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
   project     Project @relation(fields: [projectId], references: [id])
   submittedBy User    @relation(fields: [submittedById], references: [id])
+  reviewedBy  User?   @relation("ReportReviewer", fields: [reviewedById], references: [id])
 
   foremanDetail ForemanReportDetail?
   qsDetail      QsReportDetail?
@@ -165,8 +172,27 @@ model Report {
   storesDetail  StoresReportDetail?
   financeDetail FinanceReportDetail?
   attachments   Attachment[]
+  revisions     ReportRevision[]
 
   @@map("reports")
+}
+
+// One row per return: a full snapshot of the report + its detail data
+// as it stood at that moment, so a correction never silently erases
+// what was originally submitted (spec Section 2.4/9 — "not silently
+// altered; corrections recorded as revisions").
+model ReportRevision {
+  id           String   @id @default(uuid())
+  reportId     String
+  snapshot     Json
+  reason       String
+  returnedById String
+  returnedAt   DateTime @default(now())
+
+  report     Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  returnedBy User   @relation("ReportRevisionReturnedBy", fields: [returnedById], references: [id])
+
+  @@map("report_revisions")
 }
 
 // Photos/documents. reportId is required for now since Report is the

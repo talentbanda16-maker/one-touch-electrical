@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { api } from "../api";
 
 const ROLE_LABELS = {
   TECHNICAL_MANAGER: "Technical Manager",
@@ -14,6 +16,13 @@ const ROLE_LABELS = {
 export default function Dashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [pendingCount, setPendingCount] = useState(null);
+
+  useEffect(() => {
+    if (user?.role === "TECHNICAL_MANAGER") {
+      api.get("/reports/pending").then((list) => setPendingCount(list.length)).catch(() => {});
+    }
+  }, [user?.role]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -33,6 +42,14 @@ export default function Dashboard() {
       </header>
 
       <main className="p-4 space-y-4">
+        {user?.role === "TECHNICAL_MANAGER" && (
+          <button
+            onClick={() => navigate("/approvals")}
+            className="w-full bg-blue-600 text-white rounded-xl py-4 text-base font-medium"
+          >
+            Review pending reports{pendingCount !== null ? ` (${pendingCount})` : ""}
+          </button>
+        )}
         {user?.role === "FOREMAN" && (
           <button
             onClick={() => navigate("/reports/foreman")}
@@ -75,11 +92,11 @@ export default function Dashboard() {
         )}
 
         <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-slate-500">
-          {["FOREMAN", "QS", "SHE_OFFICER", "STORESMAN", "FINANCE"].includes(user?.role)
-            ? "All Step 2 reporting forms are done. Dashboards, approvals and analytics land in Steps 3–5."
+          {user?.role === "TECHNICAL_MANAGER"
+            ? "Approve or return each submitted report above. Full dashboards and analytics land in Steps 4–5."
+            : ["FOREMAN", "QS", "SHE_OFFICER", "STORESMAN", "FINANCE"].includes(user?.role)
+            ? "Reports you submit go to the Technical Manager for approval — check back if one is returned for correction."
             : "Role-specific reporting forms and dashboards land in Step 2–4."}
-          <br />
-          Foundation (login, roles, projects) is working.
         </div>
       </main>
     </div>

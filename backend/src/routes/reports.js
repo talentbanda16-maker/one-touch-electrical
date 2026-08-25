@@ -7,6 +7,32 @@ const { requireRole, requireProjectAccess } = require("../middleware/rbac");
 
 const router = express.Router();
 
+// Shared guard for every PATCH (correction/resubmit) route below: only
+// a RETURNED report can be corrected, and only by whoever submitted it
+// (or the Technical Manager) — matches the approval workflow in
+// spec Section 2.4/20 ("returned reports retain their history and
+// correction trail").
+async function assertReturnedAndOwned(req, res, reportId, expectedType) {
+  const report = await prisma.report.findUnique({ where: { id: reportId } });
+  if (!report) {
+    res.status(404).json({ error: "Report not found" });
+    return null;
+  }
+  if (report.type !== expectedType) {
+    res.status(400).json({ error: "Report type mismatch" });
+    return null;
+  }
+  if (report.status !== "RETURNED") {
+    res.status(409).json({ error: `Cannot correct a report with status ${report.status}` });
+    return null;
+  }
+  if (report.submittedById !== req.user.id && req.user.role !== "TECHNICAL_MANAGER") {
+    res.status(403).json({ error: "Only the original submitter can correct this report" });
+    return null;
+  }
+  return report;
+}
+
 const foremanSchema = z.object({
   projectId: z.string().uuid(),
   reportDate: z.string().date(),
@@ -110,6 +136,39 @@ router.get("/foreman/:id", requireAuth, async (req, res) => {
   }
 
   res.json(report);
+});
+
+router.patch("/foreman/:id", requireAuth, requireRole("FOREMAN"), async (req, res) => {
+  const report = await assertReturnedAndOwned(req, res, req.params.id, "FOREMAN");
+  if (!report) return;
+
+  const parsed = foremanSchema.omit({ submissionId: true, projectId: true }).safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+  const { reportDate, ...detail } = parsed.data;
+
+  const updated = await prisma.report.update({
+    where: { id: report.id },
+    data: {
+      reportDate: new Date(reportDate),
+      status: "SUBMITTED",
+      returnReason: null,
+      submittedAt: new Date(),
+      foremanDetail: { update: detail },
+    },
+    include: { foremanDetail: true },
+  });
+
+  await recordAudit({
+    userId: req.user.id,
+    action: "REPORT_RESUBMITTED",
+    entityType: "Report",
+    entityId: report.id,
+    metadata: { type: "FOREMAN" },
+  });
+
+  res.json(updated);
 });
 
 const qsLineSchema = z.object({
@@ -236,6 +295,44 @@ router.get("/qs/:id", requireAuth, async (req, res) => {
   res.json(report);
 });
 
+router.patch("/qs/:id", requireAuth, requireRole("QS"), async (req, res) => {
+  const report = await assertReturnedAndOwned(req, res, req.params.id, "QS");
+  if (!report) return;
+
+  const parsed = qsSchema.omit({ submissionId: true, projectId: true }).safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+  const { reportDate, comments, lines } = parsed.data;
+
+  const updated = await prisma.report.update({
+    where: { id: report.id },
+    data: {
+      reportDate: new Date(reportDate),
+      status: "SUBMITTED",
+      returnReason: null,
+      submittedAt: new Date(),
+      qsDetail: {
+        update: {
+          comments,
+          lines: { deleteMany: {}, create: lines.map(deriveQsLine) },
+        },
+      },
+    },
+    include: { qsDetail: { include: { lines: true } } },
+  });
+
+  await recordAudit({
+    userId: req.user.id,
+    action: "REPORT_RESUBMITTED",
+    entityType: "Report",
+    entityId: report.id,
+    metadata: { type: "QS", lineCount: lines.length },
+  });
+
+  res.json(updated);
+});
+
 const sheSchema = z.object({
   projectId: z.string().uuid(),
   reportDate: z.string().date(),
@@ -327,6 +424,39 @@ router.get("/she/:id", requireAuth, async (req, res) => {
   }
 
   res.json(report);
+});
+
+router.patch("/she/:id", requireAuth, requireRole("SHE_OFFICER"), async (req, res) => {
+  const report = await assertReturnedAndOwned(req, res, req.params.id, "SHE");
+  if (!report) return;
+
+  const parsed = sheSchema.omit({ submissionId: true, projectId: true }).safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+  const { reportDate, ...detail } = parsed.data;
+
+  const updated = await prisma.report.update({
+    where: { id: report.id },
+    data: {
+      reportDate: new Date(reportDate),
+      status: "SUBMITTED",
+      returnReason: null,
+      submittedAt: new Date(),
+      sheDetail: { update: detail },
+    },
+    include: { sheDetail: true },
+  });
+
+  await recordAudit({
+    userId: req.user.id,
+    action: "REPORT_RESUBMITTED",
+    entityType: "Report",
+    entityId: report.id,
+    metadata: { type: "SHE" },
+  });
+
+  res.json(updated);
 });
 
 const STOCK_DIRECTIONS = ["RECEIVED", "ISSUED", "RETURNED", "DAMAGED_LOST"];
@@ -442,6 +572,45 @@ router.get("/stores/:id", requireAuth, async (req, res) => {
   }
 
   res.json(report);
+});
+
+router.patch("/stores/:id", requireAuth, requireRole("STORESMAN"), async (req, res) => {
+  const report = await assertReturnedAndOwned(req, res, req.params.id, "STORES");
+  if (!report) return;
+
+  const parsed = storesSchema.omit({ submissionId: true, projectId: true }).safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+  const { reportDate, shortagesAndRequirements, comments, lines } = parsed.data;
+
+  const updated = await prisma.report.update({
+    where: { id: report.id },
+    data: {
+      reportDate: new Date(reportDate),
+      status: "SUBMITTED",
+      returnReason: null,
+      submittedAt: new Date(),
+      storesDetail: {
+        update: {
+          shortagesAndRequirements,
+          comments,
+          lines: { deleteMany: {}, create: lines },
+        },
+      },
+    },
+    include: { storesDetail: { include: { lines: true } } },
+  });
+
+  await recordAudit({
+    userId: req.user.id,
+    action: "REPORT_RESUBMITTED",
+    entityType: "Report",
+    entityId: report.id,
+    metadata: { type: "STORES", lineCount: lines.length },
+  });
+
+  res.json(updated);
 });
 
 const FINANCE_LINE_TYPES = ["FUNDS_RECEIVED", "EXPENDITURE", "COMMITMENT"];
@@ -563,6 +732,44 @@ router.get("/finance/:id", requireAuth, async (req, res) => {
   }
 
   res.json(report);
+});
+
+router.patch("/finance/:id", requireAuth, requireRole("FINANCE"), async (req, res) => {
+  const report = await assertReturnedAndOwned(req, res, req.params.id, "FINANCE");
+  if (!report) return;
+
+  const parsed = financeSchema.omit({ submissionId: true, projectId: true }).safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+  const { reportDate, comments, lines } = parsed.data;
+
+  const updated = await prisma.report.update({
+    where: { id: report.id },
+    data: {
+      reportDate: new Date(reportDate),
+      status: "SUBMITTED",
+      returnReason: null,
+      submittedAt: new Date(),
+      financeDetail: {
+        update: {
+          comments,
+          lines: { deleteMany: {}, create: lines },
+        },
+      },
+    },
+    include: { financeDetail: { include: { lines: true } } },
+  });
+
+  await recordAudit({
+    userId: req.user.id,
+    action: "REPORT_RESUBMITTED",
+    entityType: "Report",
+    entityId: report.id,
+    metadata: { type: "FINANCE", lineCount: lines.length },
+  });
+
+  res.json(updated);
 });
 
 module.exports = router;
