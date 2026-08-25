@@ -158,6 +158,7 @@ model Report {
   submittedBy User    @relation(fields: [submittedById], references: [id])
 
   foremanDetail ForemanReportDetail?
+  qsDetail      QsReportDetail?
 
   @@map("reports")
 }
@@ -183,4 +184,40 @@ model ForemanReportDetail {
   report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
 
   @@map("foreman_report_details")
+}
+
+// ---------- QS (header + line items, per spec Section 6/7) ----------
+
+model QsReportDetail {
+  id       String  @id @default(uuid())
+  reportId String  @unique
+  comments String?
+
+  report Report        @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  lines  QsReportLine[]
+
+  @@map("qs_report_details")
+}
+
+model QsReportLine {
+  id                String   @id @default(uuid())
+  qsReportDetailId  String
+  boqItemNumber     String
+  description       String
+  contractQuantity  Decimal  @db.Decimal(14, 2)
+  // cumulativeQuantity and contractQuantity are the source numbers;
+  // balanceQuantity and percentCompletion are derived server-side
+  // (never trust client math for progress/financial figures — spec 9.3).
+  quantityToday       Decimal @db.Decimal(14, 2)
+  cumulativeQuantity  Decimal @db.Decimal(14, 2)
+  balanceQuantity     Decimal @db.Decimal(14, 2)
+  percentCompletion   Int
+  measurements        String?
+  valuationAmount     Decimal? @db.Decimal(14, 2)
+  variationReference  String?
+  comments            String?
+
+  qsReportDetail QsReportDetail @relation(fields: [qsReportDetailId], references: [id], onDelete: Cascade)
+
+  @@map("qs_report_lines")
 }

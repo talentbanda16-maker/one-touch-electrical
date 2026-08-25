@@ -4,6 +4,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import ForemanReport from "./pages/ForemanReport";
+import QsReport from "./pages/QsReport";
 
 export default function App() {
   return (
@@ -24,6 +25,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <ForemanReport />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/reports/qs"
+            element={
+              <ProtectedRoute>
+                <QsReport />
               </ProtectedRoute>
             }
           />

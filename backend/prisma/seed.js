@@ -67,6 +67,28 @@ async function seedDemoProjectAndForeman() {
     });
     console.log(`Assigned demo Foreman to ${project.name}`);
   }
+
+  await seedDemoRoleUser(project, "QS", "qs@onetouchelectrical.com", "Demo QS");
+}
+
+async function seedDemoRoleUser(project, role, email, name) {
+  const password = "ChangeMe123!";
+  let user = await prisma.user.findUnique({ where: { email } });
+  if (!user) {
+    const passwordHash = await bcrypt.hash(password, 12);
+    user = await prisma.user.create({ data: { email, name, passwordHash, role } });
+    console.log(`Created demo ${role} account:`);
+    console.log(`  email:    ${user.email}`);
+    console.log(`  password: ${password}`);
+  }
+
+  const existingAssignment = await prisma.projectAssignment.findFirst({
+    where: { userId: user.id, projectId: project.id, role },
+  });
+  if (!existingAssignment) {
+    await prisma.projectAssignment.create({ data: { userId: user.id, projectId: project.id, role } });
+    console.log(`Assigned demo ${role} to ${project.name}`);
+  }
 }
 
 main()
