@@ -28,10 +28,12 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [pendingCount, setPendingCount] = useState(null);
   const [returnedReports, setReturnedReports] = useState([]);
+  const [summary, setSummary] = useState(null);
 
   useEffect(() => {
     if (user?.role === "TECHNICAL_MANAGER") {
       api.get("/reports/pending").then((list) => setPendingCount(list.length)).catch(() => {});
+      api.get("/dashboard/summary").then(setSummary).catch(() => {});
     }
     if (REPORTING_ROLES.includes(user?.role)) {
       api.get("/reports/mine/returned").then(setReturnedReports).catch(() => {});
@@ -76,6 +78,32 @@ export default function Dashboard() {
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {user?.role === "TECHNICAL_MANAGER" && summary && (
+          <div className="grid grid-cols-2 gap-3">
+            <StatTile label="Active projects" value={summary.activeProjects} />
+            <StatTile label="Reports today" value={summary.reportsToday} />
+            <StatTile
+              label="Pending approvals"
+              value={summary.pendingApprovals}
+              onClick={() => navigate("/approvals")}
+            />
+            <StatTile
+              label="Open actions"
+              value={summary.openActions}
+              alert={summary.overdueActions > 0}
+              alertText={`${summary.overdueActions} overdue`}
+              onClick={() => navigate("/actions")}
+            />
+            <StatTile
+              label="Open instructions"
+              value={summary.openInstructions}
+              alert={summary.overdueInstructions > 0}
+              alertText={`${summary.overdueInstructions} overdue`}
+              onClick={() => navigate("/instructions")}
+            />
           </div>
         )}
 
@@ -128,14 +156,42 @@ export default function Dashboard() {
           </button>
         )}
 
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            onClick={() => navigate("/instructions")}
+            className="bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-sm font-medium"
+          >
+            {user?.role === "TECHNICAL_MANAGER" ? "Instructions" : "My instructions"}
+          </button>
+          <button
+            onClick={() => navigate("/actions")}
+            className="bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-sm font-medium"
+          >
+            {user?.role === "TECHNICAL_MANAGER" ? "Actions" : "My actions"}
+          </button>
+        </div>
+
         <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-slate-500">
           {user?.role === "TECHNICAL_MANAGER"
-            ? "Approve or return each submitted report above. Full dashboards and analytics land in Steps 4–5."
+            ? "Approve/return reports, issue instructions, and track actions above. Progress/finance analytics and the combined report land in Steps 5–6."
             : ["FOREMAN", "QS", "SHE_OFFICER", "STORESMAN", "FINANCE"].includes(user?.role)
             ? "Reports you submit go to the Technical Manager for approval — check back if one is returned for correction."
             : "Role-specific reporting forms and dashboards land in Step 2–4."}
         </div>
       </main>
     </div>
+  );
+}
+
+function StatTile({ label, value, onClick, alert = false, alertText }) {
+  return (
+    <button
+      onClick={onClick}
+      className="bg-white rounded-xl border border-slate-200 p-4 text-left"
+    >
+      <div className="text-2xl font-semibold text-slate-900">{value}</div>
+      <div className="text-sm text-slate-500">{label}</div>
+      {alert && <div className="text-xs text-red-600 font-medium mt-1">{alertText}</div>}
+    </button>
   );
 }

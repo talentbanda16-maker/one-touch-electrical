@@ -9,6 +9,8 @@ import SheReport from "./pages/SheReport";
 import StoresReport from "./pages/StoresReport";
 import FinanceReport from "./pages/FinanceReport";
 import Approvals from "./pages/Approvals";
+import Instructions from "./pages/Instructions";
+import Actions from "./pages/Actions";
 
 export default function App() {
   return (
@@ -69,6 +71,22 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Approvals />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/instructions"
+            element={
+              <ProtectedRoute>
+                <Instructions />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/actions"
+            element={
+              <ProtectedRoute>
+                <Actions />
               </ProtectedRoute>
             }
           />

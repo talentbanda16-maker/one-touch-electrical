@@ -63,6 +63,12 @@ model User {
   reviewedReports Report[] @relation("ReportReviewer")
   reportRevisionsReturned ReportRevision[] @relation("ReportRevisionReturnedBy")
   attachments   Attachment[]
+  instructionsResponsibleFor Instruction[] @relation("InstructionResponsible")
+  instructionsIssued         Instruction[] @relation("InstructionIssuedBy")
+  instructionsVerified       Instruction[] @relation("InstructionVerifiedBy")
+  actionsAssigned Action[] @relation("ActionAssignedTo")
+  actionsCreated  Action[] @relation("ActionCreatedBy")
+  actionsVerified Action[] @relation("ActionVerifiedBy")
 
   @@map("users")
 }
@@ -85,6 +91,8 @@ model Project {
   assignments ProjectAssignment[]
   reports     Report[]
   attachments Attachment[]
+  instructions Instruction[]
+  actions      Action[]
 
   @@map("projects")
 }
@@ -173,6 +181,7 @@ model Report {
   financeDetail FinanceReportDetail?
   attachments   Attachment[]
   revisions     ReportRevision[]
+  actionsRaised Action[]
 
   @@map("reports")
 }
@@ -200,20 +209,27 @@ model ReportRevision {
 // instruction/action/finance-line parents, added when those tables exist.
 // storageKey is a relative path today (local disk); swapping to S3
 // later only changes how storageKey is resolved to bytes, not this table.
+// Exactly one of reportId/instructionId/actionId must be set — enforced
+// in the upload route, not the DB (Prisma has no declarative XOR
+// constraint), matching spec Section 19's "exactly one valid parent."
 model Attachment {
-  id           String   @id @default(uuid())
-  reportId     String
-  projectId    String
-  fileName     String
-  storageKey   String
-  mimeType     String
-  fileSize     Int
-  uploadedById String
-  createdAt    DateTime @default(now())
+  id            String   @id @default(uuid())
+  reportId      String?
+  instructionId String?
+  actionId      String?
+  projectId     String
+  fileName      String
+  storageKey    String
+  mimeType      String
+  fileSize      Int
+  uploadedById  String
+  createdAt     DateTime @default(now())
 
-  report     Report  @relation(fields: [reportId], references: [id], onDelete: Cascade)
-  project    Project @relation(fields: [projectId], references: [id])
-  uploadedBy User    @relation(fields: [uploadedById], references: [id])
+  report      Report?      @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  instruction Instruction? @relation(fields: [instructionId], references: [id], onDelete: Cascade)
+  action      Action?      @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  project     Project      @relation(fields: [projectId], references: [id])
+  uploadedBy  User         @relation(fields: [uploadedById], references: [id])
 
   @@map("attachments")
 }
@@ -387,4 +403,76 @@ model FinanceTransactionLine {
   financeReportDetail FinanceReportDetail @relation(fields: [financeReportDetailId], references: [id], onDelete: Cascade)
 
   @@map("finance_transaction_lines")
+}
+
+// ---------- Instructions & Actions (Step 4, per spec Section 13/14) ----------
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// "Overdue" (spec Section 13) is deliberately not a stored value here —
+// it's derived from dueDate < now() while status is OPEN/IN_PROGRESS,
+// computed at query time so it's never stale waiting on a cron job.
+enum WorkItemStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CLOSED
+}
+
+model Instruction {
+  id                 String         @id @default(uuid())
+  projectId          String
+  instructionNumber  String
+  description        String
+  priority           Priority       @default(MEDIUM)
+  status             WorkItemStatus @default(OPEN)
+  personResponsibleId String
+  issuedById         String
+  dateIssued         DateTime       @default(now())
+  dueDate            DateTime       @db.Date
+  verifiedById       String?
+  verifiedAt         DateTime?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  project           Project @relation(fields: [projectId], references: [id])
+  personResponsible User    @relation("InstructionResponsible", fields: [personResponsibleId], references: [id])
+  issuedBy          User    @relation("InstructionIssuedBy", fields: [issuedById], references: [id])
+  verifiedBy        User?   @relation("InstructionVerifiedBy", fields: [verifiedById], references: [id])
+  attachments        Attachment[]
+
+  @@unique([projectId, instructionNumber])
+  @@map("instructions")
+}
+
+// Can originate from a report review (sourceReportId set) or be raised
+// standalone — spec Section 14: "Create an action from any department report."
+model Action {
+  id             String         @id @default(uuid())
+  projectId      String
+  sourceReportId String?
+  description    String
+  priority       Priority       @default(MEDIUM)
+  status         WorkItemStatus @default(OPEN)
+  assignedToId   String
+  createdById    String
+  dueDate        DateTime       @db.Date
+  comments       String?
+  verifiedById   String?
+  verifiedAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  project      Project @relation(fields: [projectId], references: [id])
+  sourceReport Report? @relation(fields: [sourceReportId], references: [id])
+  assignedTo   User    @relation("ActionAssignedTo", fields: [assignedToId], references: [id])
+  createdBy    User    @relation("ActionCreatedBy", fields: [createdById], references: [id])
+  verifiedBy   User?   @relation("ActionVerifiedBy", fields: [verifiedById], references: [id])
+  attachments  Attachment[]
+
+  @@map("actions")
 }

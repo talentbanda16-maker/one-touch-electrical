@@ -9,6 +9,9 @@ const projectRoutes = require("./routes/projects");
 const reportRoutes = require("./routes/reports");
 const attachmentRoutes = require("./routes/attachments");
 const approvalRoutes = require("./routes/approvals");
+const instructionRoutes = require("./routes/instructions");
+const actionRoutes = require("./routes/actions");
+const dashboardRoutes = require("./routes/dashboard");
 
 const app = express();
 
@@ -24,6 +27,9 @@ app.use("/api/projects", projectRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api", attachmentRoutes);
 app.use("/api", approvalRoutes);
+app.use("/api/instructions", instructionRoutes);
+app.use("/api/actions", actionRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 
 app.use((err, _req, res, _next) => {
   console.error(err);
