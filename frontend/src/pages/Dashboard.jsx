@@ -57,10 +57,18 @@ export default function Dashboard() {
             Submit SHE report
           </button>
         )}
+        {user?.role === "STORESMAN" && (
+          <button
+            onClick={() => navigate("/reports/stores")}
+            className="w-full bg-blue-600 text-white rounded-xl py-4 text-base font-medium"
+          >
+            Submit stores report
+          </button>
+        )}
 
         <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-slate-500">
-          {["FOREMAN", "QS", "SHE_OFFICER"].includes(user?.role)
-            ? "Stores and Finance forms land next in Step 2."
+          {["FOREMAN", "QS", "SHE_OFFICER", "STORESMAN"].includes(user?.role)
+            ? "Finance form lands next in Step 2."
             : "Role-specific reporting forms and dashboards land in Step 2–4."}
           <br />
           Foundation (login, roles, projects) is working.

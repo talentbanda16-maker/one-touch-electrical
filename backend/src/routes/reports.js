@@ -329,4 +329,119 @@ router.get("/she/:id", requireAuth, async (req, res) => {
   res.json(report);
 });
 
+const STOCK_DIRECTIONS = ["RECEIVED", "ISSUED", "RETURNED", "DAMAGED_LOST"];
+
+const stockLineSchema = z.object({
+  itemName: z.string().min(1),
+  direction: z.enum(STOCK_DIRECTIONS),
+  quantity: z.number().nonnegative(),
+  unit: z.string().optional(),
+  unitCost: z.number().nonnegative().optional(),
+  supplier: z.string().optional(),
+  deliveryReference: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+const storesSchema = z.object({
+  projectId: z.string().uuid(),
+  reportDate: z.string().date(),
+  submissionId: z.string().min(1),
+  shortagesAndRequirements: z.string().optional(),
+  comments: z.string().optional(),
+  // Same rule as QS — a stores report with no movements says nothing (spec 9.3).
+  lines: z.array(stockLineSchema).min(1, "At least one stock transaction line is required"),
+});
+
+router.post(
+  "/stores",
+  requireAuth,
+  requireRole("STORESMAN"),
+  requireProjectAccess,
+  async (req, res) => {
+    const parsed = storesSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+    const { projectId, reportDate, submissionId, shortagesAndRequirements, comments, lines } = parsed.data;
+
+    const existing = await prisma.report.findUnique({
+      where: { submissionId },
+      include: { storesDetail: { include: { lines: true } } },
+    });
+    if (existing) {
+      return res.status(200).json(existing);
+    }
+
+    const report = await prisma.report.create({
+      data: {
+        projectId,
+        type: "STORES",
+        reportDate: new Date(reportDate),
+        submittedById: req.user.id,
+        submissionId,
+        storesDetail: {
+          create: {
+            shortagesAndRequirements,
+            comments,
+            lines: { create: lines },
+          },
+        },
+      },
+      include: { storesDetail: { include: { lines: true } } },
+    });
+
+    await recordAudit({
+      userId: req.user.id,
+      action: "REPORT_SUBMITTED",
+      entityType: "Report",
+      entityId: report.id,
+      metadata: { type: "STORES", projectId, lineCount: lines.length },
+    });
+
+    res.status(201).json(report);
+  }
+);
+
+router.get("/stores", requireAuth, requireProjectAccess, async (req, res) => {
+  const { projectId } = req.query;
+  if (!projectId) return res.status(400).json({ error: "projectId is required" });
+
+  const where = { projectId, type: "STORES" };
+  if (req.user.role === "STORESMAN") {
+    where.submittedById = req.user.id;
+  }
+
+  const reports = await prisma.report.findMany({
+    where,
+    include: {
+      storesDetail: { include: { lines: true } },
+      submittedBy: { select: { id: true, name: true } },
+    },
+    orderBy: { reportDate: "desc" },
+  });
+  res.json(reports);
+});
+
+router.get("/stores/:id", requireAuth, async (req, res) => {
+  const report = await prisma.report.findUnique({
+    where: { id: req.params.id },
+    include: {
+      storesDetail: { include: { lines: true } },
+      submittedBy: { select: { id: true, name: true } },
+    },
+  });
+  if (!report) return res.status(404).json({ error: "Report not found" });
+
+  if (req.user.role !== "TECHNICAL_MANAGER" && req.user.role !== "MANAGEMENT") {
+    const assignment = await prisma.projectAssignment.findFirst({
+      where: { userId: req.user.id, projectId: report.projectId },
+    });
+    if (!assignment && report.submittedById !== req.user.id) {
+      return res.status(403).json({ error: "Not permitted to view this report" });
+    }
+  }
+
+  res.json(report);
+});
+
 module.exports = router;

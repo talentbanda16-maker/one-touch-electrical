@@ -162,6 +162,7 @@ model Report {
   foremanDetail ForemanReportDetail?
   qsDetail      QsReportDetail?
   sheDetail     SheReportDetail?
+  storesDetail  StoresReportDetail?
   attachments   Attachment[]
 
   @@map("reports")
@@ -268,4 +269,45 @@ model SheReportDetail {
   report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
 
   @@map("she_report_details")
+}
+
+// ---------- Stores (per spec Section 9) ----------
+
+enum StockDirection {
+  RECEIVED
+  ISSUED
+  RETURNED
+  DAMAGED_LOST
+}
+
+model StoresReportDetail {
+  id                       String  @id @default(uuid())
+  reportId                 String  @unique
+  shortagesAndRequirements String?
+  comments                 String?
+
+  report Report                 @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  lines  StockTransactionLine[]
+
+  @@map("stores_report_details")
+}
+
+// Opening/closing stock balances are a running total across many of
+// these lines over time (spec 9.3: calculated from source records,
+// not stored here) — Step 2 only captures each day's movements.
+model StockTransactionLine {
+  id                    String         @id @default(uuid())
+  storesReportDetailId  String
+  itemName              String
+  direction             StockDirection
+  quantity              Decimal        @db.Decimal(14, 2)
+  unit                  String?
+  unitCost              Decimal?       @db.Decimal(14, 2)
+  supplier              String?
+  deliveryReference     String?
+  notes                 String?
+
+  storesReportDetail StoresReportDetail @relation(fields: [storesReportDetailId], references: [id], onDelete: Cascade)
+
+  @@map("stock_transaction_lines")
 }
