@@ -5,6 +5,7 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import ForemanReport from "./pages/ForemanReport";
 import QsReport from "./pages/QsReport";
+import SheReport from "./pages/SheReport";
 
 export default function App() {
   return (
@@ -33,6 +34,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <QsReport />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/reports/she"
+            element={
+              <ProtectedRoute>
+                <SheReport />
               </ProtectedRoute>
             }
           />

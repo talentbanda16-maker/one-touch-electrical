@@ -161,6 +161,7 @@ model Report {
 
   foremanDetail ForemanReportDetail?
   qsDetail      QsReportDetail?
+  sheDetail     SheReportDetail?
   attachments   Attachment[]
 
   @@map("reports")
@@ -246,4 +247,25 @@ model QsReportLine {
   qsReportDetail QsReportDetail @relation(fields: [qsReportDetailId], references: [id], onDelete: Cascade)
 
   @@map("qs_report_lines")
+}
+
+// ---------- SHE (per spec Section 8) ----------
+
+// Scoped to exactly the SHE Officer's main functions per spec Section 3's
+// role table (Toolbox talks, inspections, PPE, incidents, near misses,
+// corrective actions) — narrower than the full Section 8 field list.
+model SheReportDetail {
+  id                    String  @id @default(uuid())
+  reportId              String  @unique
+  toolboxTalksConducted String?
+  safetyInspections     String?
+  ppeCompliance         String?
+  correctiveActions     String?
+  incidentCount         Int     @default(0)
+  nearMissCount         Int     @default(0)
+  incidentsDescription  String?
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@map("she_report_details")
 }
