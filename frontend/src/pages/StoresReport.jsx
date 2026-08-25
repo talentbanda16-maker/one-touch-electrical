@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api, getAccessToken } from "../api";
 
@@ -24,6 +24,7 @@ const DIRECTIONS = [
 export default function StoresReport() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useState("");
   const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
@@ -35,6 +36,7 @@ export default function StoresReport() {
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [stagedPhotos, setStagedPhotos] = useState([]);
+  const [editingReportId, setEditingReportId] = useState(null);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -47,6 +49,47 @@ export default function StoresReport() {
     if (!projectId) return;
     api.get(`/reports/stores?projectId=${projectId}`).then(setReports).catch(() => setReports([]));
   }, [projectId, success]);
+
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    if (!editId) return;
+    api.get(`/reports/stores/${editId}`).then((report) => {
+      startEditing(report);
+      setSearchParams({}, { replace: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  function startEditing(report) {
+    setProjectId(report.projectId);
+    setReportDate(report.reportDate.slice(0, 10));
+    setShortagesAndRequirements(report.storesDetail.shortagesAndRequirements || "");
+    setComments(report.storesDetail.comments || "");
+    setLines(
+      report.storesDetail.lines.map((l) => ({
+        itemName: l.itemName,
+        direction: l.direction,
+        quantity: String(l.quantity),
+        unit: l.unit || "",
+        unitCost: l.unitCost != null ? String(l.unitCost) : "",
+        supplier: l.supplier || "",
+        deliveryReference: l.deliveryReference || "",
+        notes: l.notes || "",
+      }))
+    );
+    setEditingReportId(report.id);
+    setError("");
+    setSuccess("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEditing() {
+    setEditingReportId(null);
+    setShortagesAndRequirements("");
+    setComments("");
+    setLines([{ ...EMPTY_LINE }]);
+    setReportDate(new Date().toISOString().slice(0, 10));
+  }
 
   function updateLine(index, field, value) {
     setLines((ls) => ls.map((l, i) => (i === index ? { ...l, [field]: value } : l)));
@@ -96,24 +139,35 @@ export default function StoresReport() {
     setSuccess("");
     setSubmitting(true);
     try {
-      const body = {
-        projectId,
-        reportDate,
-        shortagesAndRequirements,
-        comments,
-        submissionId: crypto.randomUUID(),
-        lines: lines.map((l) => ({
-          itemName: l.itemName,
-          direction: l.direction,
-          quantity: Number(l.quantity) || 0,
-          unit: l.unit || undefined,
-          unitCost: l.unitCost ? Number(l.unitCost) : undefined,
-          supplier: l.supplier || undefined,
-          deliveryReference: l.deliveryReference || undefined,
-          notes: l.notes || undefined,
-        })),
-      };
-      const report = await api.post("/reports/stores", body);
+      const lineData = lines.map((l) => ({
+        itemName: l.itemName,
+        direction: l.direction,
+        quantity: Number(l.quantity) || 0,
+        unit: l.unit || undefined,
+        unitCost: l.unitCost ? Number(l.unitCost) : undefined,
+        supplier: l.supplier || undefined,
+        deliveryReference: l.deliveryReference || undefined,
+        notes: l.notes || undefined,
+      }));
+
+      let report;
+      if (editingReportId) {
+        report = await api.patch(`/reports/stores/${editingReportId}`, {
+          reportDate,
+          shortagesAndRequirements,
+          comments,
+          lines: lineData,
+        });
+      } else {
+        report = await api.post("/reports/stores", {
+          projectId,
+          reportDate,
+          shortagesAndRequirements,
+          comments,
+          submissionId: crypto.randomUUID(),
+          lines: lineData,
+        });
+      }
 
       let photoFailures = 0;
       for (const { file } of stagedPhotos) {
@@ -128,12 +182,13 @@ export default function StoresReport() {
       setStagedPhotos([]);
       setSuccess(
         photoFailures > 0
-          ? `Stores report submitted, but ${photoFailures} photo(s) failed to upload.`
-          : "Stores report submitted."
+          ? `Stores report ${editingReportId ? "resubmitted" : "submitted"}, but ${photoFailures} photo(s) failed to upload.`
+          : `Stores report ${editingReportId ? "resubmitted" : "submitted"}.`
       );
       setShortagesAndRequirements("");
       setComments("");
       setLines([{ ...EMPTY_LINE }]);
+      setEditingReportId(null);
     } catch (err) {
       setError(err.message || "Failed to submit report");
     } finally {
@@ -167,13 +222,22 @@ export default function StoresReport() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {editingReportId && (
+            <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-sm text-blue-800">
+              <span>Correcting a returned report</span>
+              <button type="button" onClick={cancelEditing} className="text-blue-600 underline">
+                Cancel
+              </button>
+            </div>
+          )}
           <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Project</label>
               <select
                 value={projectId}
                 onChange={(e) => setProjectId(e.target.value)}
-                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+                disabled={!!editingReportId}
+                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base disabled:bg-slate-100"
               >
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -369,7 +433,7 @@ export default function StoresReport() {
             disabled={submitting || !projectId}
             className="w-full bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
           >
-            {submitting ? "Submitting..." : "Submit stores report"}
+            {submitting ? "Submitting..." : editingReportId ? "Resubmit stores report" : "Submit stores report"}
           </button>
         </form>
 

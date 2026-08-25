@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api, getAccessToken } from "../api";
 
@@ -26,6 +26,7 @@ const NUMBER_FIELDS = ["workersOnSite", "labourSkilled", "labourUnskilled", "lab
 export default function ForemanReport() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useState("");
   const [form, setForm] = useState(EMPTY_FORM);
@@ -34,6 +35,7 @@ export default function ForemanReport() {
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [stagedPhotos, setStagedPhotos] = useState([]); // [{ file, previewUrl }]
+  const [editingReportId, setEditingReportId] = useState(null);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -81,17 +83,68 @@ export default function ForemanReport() {
     }
   }
 
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    if (!editId) return;
+    api.get(`/reports/foreman/${editId}`).then((report) => {
+      startEditing(report);
+      setSearchParams({}, { replace: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  function startEditing(report) {
+    setProjectId(report.projectId);
+    const d = report.foremanDetail;
+    setForm({
+      reportDate: report.reportDate.slice(0, 10),
+      siteLocation: d.siteLocation || "",
+      workersOnSite: d.workersOnSite,
+      labourSkilled: d.labourSkilled,
+      labourUnskilled: d.labourUnskilled,
+      labourSubcontractor: d.labourSubcontractor,
+      workCompleted: d.workCompleted || "",
+      workInProgress: d.workInProgress || "",
+      percentProgress: d.percentProgress,
+      equipmentUsed: d.equipmentUsed || "",
+      materialsUsed: d.materialsUsed || "",
+      materialsRequired: d.materialsRequired || "",
+      constraints: d.constraints || "",
+      instructionsReceived: d.instructionsReceived || "",
+      nextDayPlan: d.nextDayPlan || "",
+    });
+    setEditingReportId(report.id);
+    setError("");
+    setSuccess("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEditing() {
+    setEditingReportId(null);
+    setForm(EMPTY_FORM);
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
     setSuccess("");
     setSubmitting(true);
     try {
-      const body = { ...form, projectId, submissionId: crypto.randomUUID() };
+      const numericForm = { ...form };
       for (const field of NUMBER_FIELDS) {
-        body[field] = Number(body[field]) || 0;
+        numericForm[field] = Number(numericForm[field]) || 0;
       }
-      const report = await api.post("/reports/foreman", body);
+
+      let report;
+      if (editingReportId) {
+        report = await api.patch(`/reports/foreman/${editingReportId}`, numericForm);
+      } else {
+        report = await api.post("/reports/foreman", {
+          ...numericForm,
+          projectId,
+          submissionId: crypto.randomUUID(),
+        });
+      }
 
       // Report data is already saved at this point — a photo failure below
       // doesn't lose the report, it just leaves that one photo unattached.
@@ -108,10 +161,11 @@ export default function ForemanReport() {
       setStagedPhotos([]);
       setSuccess(
         photoFailures > 0
-          ? `Report submitted, but ${photoFailures} photo(s) failed to upload — try adding them again from "Recent reports" below.`
-          : "Report submitted."
+          ? `Report ${editingReportId ? "resubmitted" : "submitted"}, but ${photoFailures} photo(s) failed to upload — try adding them again from "Recent reports" below.`
+          : `Report ${editingReportId ? "resubmitted" : "submitted"}.`
       );
       setForm(EMPTY_FORM);
+      setEditingReportId(null);
     } catch (err) {
       setError(err.message || "Failed to submit report");
     } finally {
@@ -145,12 +199,21 @@ export default function ForemanReport() {
         )}
 
         <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
+          {editingReportId && (
+            <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-sm text-blue-800">
+              <span>Correcting a returned report</span>
+              <button type="button" onClick={cancelEditing} className="text-blue-600 underline">
+                Cancel
+              </button>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Project</label>
             <select
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
-              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+              disabled={!!editingReportId}
+              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base disabled:bg-slate-100"
             >
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -296,7 +359,7 @@ export default function ForemanReport() {
             disabled={submitting || !projectId}
             className="w-full bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
           >
-            {submitting ? "Submitting..." : "Submit report"}
+            {submitting ? "Submitting..." : editingReportId ? "Resubmit report" : "Submit report"}
           </button>
         </form>
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api, getAccessToken } from "../api";
 
@@ -18,6 +18,7 @@ const EMPTY_LINE = {
 export default function QsReport() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useState("");
   const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
@@ -28,6 +29,7 @@ export default function QsReport() {
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [stagedPhotos, setStagedPhotos] = useState([]); // [{ file, previewUrl }]
+  const [editingReportId, setEditingReportId] = useState(null);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -40,6 +42,46 @@ export default function QsReport() {
     if (!projectId) return;
     api.get(`/reports/qs?projectId=${projectId}`).then(setReports).catch(() => setReports([]));
   }, [projectId, success]);
+
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    if (!editId) return;
+    api.get(`/reports/qs/${editId}`).then((report) => {
+      startEditing(report);
+      setSearchParams({}, { replace: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  function startEditing(report) {
+    setProjectId(report.projectId);
+    setReportDate(report.reportDate.slice(0, 10));
+    setComments(report.qsDetail.comments || "");
+    setLines(
+      report.qsDetail.lines.map((l) => ({
+        boqItemNumber: l.boqItemNumber,
+        description: l.description,
+        contractQuantity: String(l.contractQuantity),
+        quantityToday: String(l.quantityToday),
+        cumulativeQuantity: String(l.cumulativeQuantity),
+        measurements: l.measurements || "",
+        valuationAmount: l.valuationAmount != null ? String(l.valuationAmount) : "",
+        variationReference: l.variationReference || "",
+        comments: l.comments || "",
+      }))
+    );
+    setEditingReportId(report.id);
+    setError("");
+    setSuccess("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEditing() {
+    setEditingReportId(null);
+    setComments("");
+    setLines([{ ...EMPTY_LINE }]);
+    setReportDate(new Date().toISOString().slice(0, 10));
+  }
 
   function updateLine(index, field, value) {
     setLines((ls) => ls.map((l, i) => (i === index ? { ...l, [field]: value } : l)));
@@ -89,24 +131,30 @@ export default function QsReport() {
     setSuccess("");
     setSubmitting(true);
     try {
-      const body = {
-        projectId,
-        reportDate,
-        comments,
-        submissionId: crypto.randomUUID(),
-        lines: lines.map((l) => ({
-          boqItemNumber: l.boqItemNumber,
-          description: l.description,
-          contractQuantity: Number(l.contractQuantity) || 0,
-          quantityToday: Number(l.quantityToday) || 0,
-          cumulativeQuantity: Number(l.cumulativeQuantity) || 0,
-          measurements: l.measurements || undefined,
-          valuationAmount: l.valuationAmount ? Number(l.valuationAmount) : undefined,
-          variationReference: l.variationReference || undefined,
-          comments: l.comments || undefined,
-        })),
-      };
-      const report = await api.post("/reports/qs", body);
+      const lineData = lines.map((l) => ({
+        boqItemNumber: l.boqItemNumber,
+        description: l.description,
+        contractQuantity: Number(l.contractQuantity) || 0,
+        quantityToday: Number(l.quantityToday) || 0,
+        cumulativeQuantity: Number(l.cumulativeQuantity) || 0,
+        measurements: l.measurements || undefined,
+        valuationAmount: l.valuationAmount ? Number(l.valuationAmount) : undefined,
+        variationReference: l.variationReference || undefined,
+        comments: l.comments || undefined,
+      }));
+
+      let report;
+      if (editingReportId) {
+        report = await api.patch(`/reports/qs/${editingReportId}`, { reportDate, comments, lines: lineData });
+      } else {
+        report = await api.post("/reports/qs", {
+          projectId,
+          reportDate,
+          comments,
+          submissionId: crypto.randomUUID(),
+          lines: lineData,
+        });
+      }
 
       let photoFailures = 0;
       for (const { file } of stagedPhotos) {
@@ -121,11 +169,12 @@ export default function QsReport() {
       setStagedPhotos([]);
       setSuccess(
         photoFailures > 0
-          ? `QS report submitted, but ${photoFailures} photo(s) failed to upload.`
-          : "QS report submitted."
+          ? `QS report ${editingReportId ? "resubmitted" : "submitted"}, but ${photoFailures} photo(s) failed to upload.`
+          : `QS report ${editingReportId ? "resubmitted" : "submitted"}.`
       );
       setComments("");
       setLines([{ ...EMPTY_LINE }]);
+      setEditingReportId(null);
     } catch (err) {
       setError(err.message || "Failed to submit report");
     } finally {
@@ -159,13 +208,22 @@ export default function QsReport() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {editingReportId && (
+            <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-sm text-blue-800">
+              <span>Correcting a returned report</span>
+              <button type="button" onClick={cancelEditing} className="text-blue-600 underline">
+                Cancel
+              </button>
+            </div>
+          )}
           <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Project</label>
               <select
                 value={projectId}
                 onChange={(e) => setProjectId(e.target.value)}
-                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+                disabled={!!editingReportId}
+                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base disabled:bg-slate-100"
               >
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -364,7 +422,7 @@ export default function QsReport() {
             disabled={submitting || !projectId}
             className="w-full bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
           >
-            {submitting ? "Submitting..." : "Submit QS report"}
+            {submitting ? "Submitting..." : editingReportId ? "Resubmit QS report" : "Submit QS report"}
           </button>
         </form>
 

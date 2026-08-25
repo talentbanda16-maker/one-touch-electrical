@@ -13,14 +13,28 @@ const ROLE_LABELS = {
   MANAGEMENT: "Management",
 };
 
+const REPORT_TYPE_ROUTES = {
+  FOREMAN: "/reports/foreman",
+  QS: "/reports/qs",
+  SHE: "/reports/she",
+  STORES: "/reports/stores",
+  FINANCE: "/reports/finance",
+};
+
+const REPORTING_ROLES = ["FOREMAN", "QS", "SHE_OFFICER", "STORESMAN", "FINANCE"];
+
 export default function Dashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [pendingCount, setPendingCount] = useState(null);
+  const [returnedReports, setReturnedReports] = useState([]);
 
   useEffect(() => {
     if (user?.role === "TECHNICAL_MANAGER") {
       api.get("/reports/pending").then((list) => setPendingCount(list.length)).catch(() => {});
+    }
+    if (REPORTING_ROLES.includes(user?.role)) {
+      api.get("/reports/mine/returned").then(setReturnedReports).catch(() => {});
     }
   }, [user?.role]);
 
@@ -42,6 +56,29 @@ export default function Dashboard() {
       </header>
 
       <main className="p-4 space-y-4">
+        {returnedReports.length > 0 && (
+          <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 space-y-2">
+            <h2 className="font-medium text-amber-900">
+              {returnedReports.length} report{returnedReports.length > 1 ? "s" : ""} returned for correction
+            </h2>
+            {returnedReports.map((r) => (
+              <div key={r.id} className="bg-white border border-amber-200 rounded-md p-2 text-sm space-y-1">
+                <div className="font-medium">
+                  {r.project.name} · {new Date(r.reportDate).toLocaleDateString()}
+                </div>
+                <div className="text-amber-800">Reason: {r.returnReason}</div>
+                <button
+                  type="button"
+                  onClick={() => navigate(`${REPORT_TYPE_ROUTES[r.type]}?edit=${r.id}`)}
+                  className="text-blue-600 font-medium"
+                >
+                  Edit &amp; resubmit
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {user?.role === "TECHNICAL_MANAGER" && (
           <button
             onClick={() => navigate("/approvals")}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api, getAccessToken } from "../api";
 
@@ -46,6 +46,7 @@ const CATEGORIES_BY_TYPE = {
 export default function FinanceReport() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useState("");
   const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
@@ -56,6 +57,7 @@ export default function FinanceReport() {
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [stagedPhotos, setStagedPhotos] = useState([]);
+  const [editingReportId, setEditingReportId] = useState(null);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -68,6 +70,42 @@ export default function FinanceReport() {
     if (!projectId) return;
     api.get(`/reports/finance?projectId=${projectId}`).then(setReports).catch(() => setReports([]));
   }, [projectId, success]);
+
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    if (!editId) return;
+    api.get(`/reports/finance/${editId}`).then((report) => {
+      startEditing(report);
+      setSearchParams({}, { replace: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  function startEditing(report) {
+    setProjectId(report.projectId);
+    setReportDate(report.reportDate.slice(0, 10));
+    setComments(report.financeDetail.comments || "");
+    setLines(
+      report.financeDetail.lines.map((l) => ({
+        type: l.type,
+        category: l.category,
+        amount: String(l.amount),
+        description: l.description || "",
+        paymentReference: l.paymentReference || "",
+      }))
+    );
+    setEditingReportId(report.id);
+    setError("");
+    setSuccess("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEditing() {
+    setEditingReportId(null);
+    setComments("");
+    setLines([{ ...EMPTY_LINE }]);
+    setReportDate(new Date().toISOString().slice(0, 10));
+  }
 
   function updateLine(index, field, value) {
     setLines((ls) =>
@@ -126,20 +164,26 @@ export default function FinanceReport() {
     setSuccess("");
     setSubmitting(true);
     try {
-      const body = {
-        projectId,
-        reportDate,
-        comments,
-        submissionId: crypto.randomUUID(),
-        lines: lines.map((l) => ({
-          type: l.type,
-          category: l.category,
-          amount: Number(l.amount) || 0,
-          description: l.description || undefined,
-          paymentReference: l.paymentReference || undefined,
-        })),
-      };
-      const report = await api.post("/reports/finance", body);
+      const lineData = lines.map((l) => ({
+        type: l.type,
+        category: l.category,
+        amount: Number(l.amount) || 0,
+        description: l.description || undefined,
+        paymentReference: l.paymentReference || undefined,
+      }));
+
+      let report;
+      if (editingReportId) {
+        report = await api.patch(`/reports/finance/${editingReportId}`, { reportDate, comments, lines: lineData });
+      } else {
+        report = await api.post("/reports/finance", {
+          projectId,
+          reportDate,
+          comments,
+          submissionId: crypto.randomUUID(),
+          lines: lineData,
+        });
+      }
 
       let photoFailures = 0;
       for (const { file } of stagedPhotos) {
@@ -154,11 +198,12 @@ export default function FinanceReport() {
       setStagedPhotos([]);
       setSuccess(
         photoFailures > 0
-          ? `Finance report submitted, but ${photoFailures} supporting document(s) failed to upload.`
-          : "Finance report submitted."
+          ? `Finance report ${editingReportId ? "resubmitted" : "submitted"}, but ${photoFailures} supporting document(s) failed to upload.`
+          : `Finance report ${editingReportId ? "resubmitted" : "submitted"}.`
       );
       setComments("");
       setLines([{ ...EMPTY_LINE }]);
+      setEditingReportId(null);
     } catch (err) {
       setError(err.message || "Failed to submit report");
     } finally {
@@ -192,13 +237,22 @@ export default function FinanceReport() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {editingReportId && (
+            <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-sm text-blue-800">
+              <span>Correcting a returned report</span>
+              <button type="button" onClick={cancelEditing} className="text-blue-600 underline">
+                Cancel
+              </button>
+            </div>
+          )}
           <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Project</label>
               <select
                 value={projectId}
                 onChange={(e) => setProjectId(e.target.value)}
-                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+                disabled={!!editingReportId}
+                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base disabled:bg-slate-100"
               >
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -350,7 +404,7 @@ export default function FinanceReport() {
             disabled={submitting || !projectId}
             className="w-full bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
           >
-            {submitting ? "Submitting..." : "Submit finance report"}
+            {submitting ? "Submitting..." : editingReportId ? "Resubmit finance report" : "Submit finance report"}
           </button>
         </form>
 

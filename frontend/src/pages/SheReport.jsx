@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 
@@ -19,6 +19,7 @@ const NUMBER_FIELDS = ["incidentCount", "nearMissCount"];
 export default function SheReport() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useState("");
   const [form, setForm] = useState(EMPTY_FORM);
@@ -26,6 +27,7 @@ export default function SheReport() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [editingReportId, setEditingReportId] = useState(null);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -39,6 +41,40 @@ export default function SheReport() {
     api.get(`/reports/she?projectId=${projectId}`).then(setReports).catch(() => setReports([]));
   }, [projectId, success]);
 
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    if (!editId) return;
+    api.get(`/reports/she/${editId}`).then((report) => {
+      startEditing(report);
+      setSearchParams({}, { replace: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  function startEditing(report) {
+    const d = report.sheDetail;
+    setProjectId(report.projectId);
+    setForm({
+      reportDate: report.reportDate.slice(0, 10),
+      toolboxTalksConducted: d.toolboxTalksConducted || "",
+      safetyInspections: d.safetyInspections || "",
+      ppeCompliance: d.ppeCompliance || "",
+      correctiveActions: d.correctiveActions || "",
+      incidentCount: d.incidentCount,
+      nearMissCount: d.nearMissCount,
+      incidentsDescription: d.incidentsDescription || "",
+    });
+    setEditingReportId(report.id);
+    setError("");
+    setSuccess("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEditing() {
+    setEditingReportId(null);
+    setForm(EMPTY_FORM);
+  }
+
   function updateField(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
   }
@@ -49,13 +85,20 @@ export default function SheReport() {
     setSuccess("");
     setSubmitting(true);
     try {
-      const body = { ...form, projectId, submissionId: crypto.randomUUID() };
+      const numericForm = { ...form };
       for (const field of NUMBER_FIELDS) {
-        body[field] = Number(body[field]) || 0;
+        numericForm[field] = Number(numericForm[field]) || 0;
       }
-      await api.post("/reports/she", body);
-      setSuccess("SHE report submitted.");
+
+      if (editingReportId) {
+        await api.patch(`/reports/she/${editingReportId}`, numericForm);
+      } else {
+        await api.post("/reports/she", { ...numericForm, projectId, submissionId: crypto.randomUUID() });
+      }
+
+      setSuccess(`SHE report ${editingReportId ? "resubmitted" : "submitted"}.`);
       setForm(EMPTY_FORM);
+      setEditingReportId(null);
     } catch (err) {
       setError(err.message || "Failed to submit report");
     } finally {
@@ -89,12 +132,21 @@ export default function SheReport() {
         )}
 
         <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
+          {editingReportId && (
+            <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-sm text-blue-800">
+              <span>Correcting a returned report</span>
+              <button type="button" onClick={cancelEditing} className="text-blue-600 underline">
+                Cancel
+              </button>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Project</label>
             <select
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
-              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+              disabled={!!editingReportId}
+              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base disabled:bg-slate-100"
             >
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -159,7 +211,7 @@ export default function SheReport() {
             disabled={submitting || !projectId}
             className="w-full bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
           >
-            {submitting ? "Submitting..." : "Submit SHE report"}
+            {submitting ? "Submitting..." : editingReportId ? "Resubmit SHE report" : "Submit SHE report"}
           </button>
         </form>
 

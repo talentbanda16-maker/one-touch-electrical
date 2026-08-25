@@ -18,6 +18,19 @@ const DETAIL_INCLUDE = {
   financeDetail: { include: { lines: true } },
 };
 
+// Powers the "returned for correction" alert on the reporting roles'
+// dashboard — spec Section 18 lists this as a required notification.
+// Not scoped to one project, since a returned report can happen on
+// any project the user is assigned to.
+router.get("/reports/mine/returned", requireAuth, async (req, res) => {
+  const reports = await prisma.report.findMany({
+    where: { submittedById: req.user.id, status: "RETURNED" },
+    include: { project: { select: { id: true, name: true, code: true } } },
+    orderBy: { reviewedAt: "desc" },
+  });
+  res.json(reports);
+});
+
 router.get("/reports/pending", requireAuth, requireRole(), async (req, res) => {
   const reports = await prisma.report.findMany({
     where: { status: "SUBMITTED" },
