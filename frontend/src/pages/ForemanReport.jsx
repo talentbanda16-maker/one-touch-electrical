@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { api, getAccessToken } from "../api";
+import { api } from "../api";
+import { queueReport, isNetworkFailure } from "../lib/offlineQueue";
+import AttachmentThumb from "../components/AttachmentThumb";
 
 const EMPTY_FORM = {
   reportDate: new Date().toISOString().slice(0, 10),
   siteLocation: "",
-  workersOnSite: 0,
-  labourSkilled: 0,
-  labourUnskilled: 0,
-  labourSubcontractor: 0,
+  electricalSupervisors: 0,
+  electricians: 0,
+  electricalAssistants: 0,
+  generalHands: 0,
+  sheOfficersOnSite: 0,
   workCompleted: "",
   workInProgress: "",
   percentProgress: 0,
@@ -21,7 +24,25 @@ const EMPTY_FORM = {
   nextDayPlan: "",
 };
 
-const NUMBER_FIELDS = ["workersOnSite", "labourSkilled", "labourUnskilled", "labourSubcontractor", "percentProgress"];
+const NUMBER_FIELDS = [
+  "electricalSupervisors",
+  "electricians",
+  "electricalAssistants",
+  "generalHands",
+  "sheOfficersOnSite",
+  "percentProgress",
+];
+
+// Fixed manpower categories — matches the paper form's section 4 table.
+// The Foreman only ever changes the Quantity; Total Workforce is
+// computed live here and again authoritatively on the server.
+const MANPOWER_FIELDS = [
+  { key: "electricalSupervisors", label: "Electrical Supervisors" },
+  { key: "electricians", label: "Electricians" },
+  { key: "electricalAssistants", label: "Electrical Assistants" },
+  { key: "generalHands", label: "General Hands" },
+  { key: "sheOfficersOnSite", label: "SHE officer" },
+];
 
 export default function ForemanReport() {
   const { user } = useAuth();
@@ -35,7 +56,15 @@ export default function ForemanReport() {
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [stagedPhotos, setStagedPhotos] = useState([]); // [{ file, previewUrl }]
+  const [existingAttachments, setExistingAttachments] = useState([]);
   const [editingReportId, setEditingReportId] = useState(null);
+  // Generated once per form session rather than fresh inside handleSubmit
+  // — a submissionId that changes on every call defeats its own purpose
+  // (deduping a retried/double-fired submit) since two rapid submits of
+  // the "same" report would carry two different ids.
+  const [submissionId, setSubmissionId] = useState(() => crypto.randomUUID());
+  const [hasDraft, setHasDraft] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -48,6 +77,50 @@ export default function ForemanReport() {
     if (!projectId) return;
     api.get(`/reports/foreman?projectId=${projectId}`).then(setReports).catch(() => setReports([]));
   }, [projectId, success]);
+
+  // A saved draft only makes sense for a brand-new report — editing a
+  // returned one already has its own in-progress state loaded via `edit=`.
+  useEffect(() => {
+    if (!projectId || editingReportId) return;
+    api
+      .get(`/drafts/FOREMAN?projectId=${projectId}`)
+      .then((draft) => {
+        if (draft) {
+          setForm({ ...EMPTY_FORM, ...draft.data, reportDate: draft.reportDate.slice(0, 10) });
+          setHasDraft(true);
+        } else {
+          setHasDraft(false);
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  async function handleSaveDraft() {
+    if (!projectId) return;
+    setError("");
+    setSuccess("");
+    setSavingDraft(true);
+    try {
+      await api.put(`/drafts/FOREMAN`, { projectId, reportDate: form.reportDate, data: form });
+      setHasDraft(true);
+      setSuccess("Draft saved.");
+    } catch (err) {
+      setError(err.message || "Failed to save draft");
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  async function handleDiscardDraft() {
+    try {
+      await api.delete(`/drafts/FOREMAN?projectId=${projectId}`);
+    } catch {
+      // best-effort
+    }
+    setForm(EMPTY_FORM);
+    setHasDraft(false);
+  }
 
   function updateField(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -72,15 +145,7 @@ export default function ForemanReport() {
   async function uploadPhoto(reportId, file) {
     const formData = new FormData();
     formData.append("photo", file);
-    const res = await fetch(`/api/reports/${reportId}/attachments`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${getAccessToken()}` },
-      body: formData,
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "Photo upload failed");
-    }
+    await api.upload(`/reports/${reportId}/attachments`, formData);
   }
 
   useEffect(() => {
@@ -99,10 +164,11 @@ export default function ForemanReport() {
     setForm({
       reportDate: report.reportDate.slice(0, 10),
       siteLocation: d.siteLocation || "",
-      workersOnSite: d.workersOnSite,
-      labourSkilled: d.labourSkilled,
-      labourUnskilled: d.labourUnskilled,
-      labourSubcontractor: d.labourSubcontractor,
+      electricalSupervisors: d.electricalSupervisors,
+      electricians: d.electricians,
+      electricalAssistants: d.electricalAssistants,
+      generalHands: d.generalHands,
+      sheOfficersOnSite: d.sheOfficersOnSite,
       workCompleted: d.workCompleted || "",
       workInProgress: d.workInProgress || "",
       percentProgress: d.percentProgress,
@@ -116,12 +182,18 @@ export default function ForemanReport() {
     setEditingReportId(report.id);
     setError("");
     setSuccess("");
+    setExistingAttachments([]);
+    // The photos/documents originally submitted with this report are
+    // still there (correcting the text doesn't touch attachments) — just
+    // never shown here before, which made it look like they'd vanished.
+    api.get(`/reports/${report.id}/attachments`).then(setExistingAttachments).catch(() => {});
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function cancelEditing() {
     setEditingReportId(null);
     setForm(EMPTY_FORM);
+    setExistingAttachments([]);
   }
 
   async function handleSubmit(e) {
@@ -139,11 +211,24 @@ export default function ForemanReport() {
       if (editingReportId) {
         report = await api.patch(`/reports/foreman/${editingReportId}`, numericForm);
       } else {
-        report = await api.post("/reports/foreman", {
-          ...numericForm,
-          projectId,
-          submissionId: crypto.randomUUID(),
-        });
+        const payload = { ...numericForm, projectId, submissionId };
+        try {
+          report = await api.post("/reports/foreman", payload);
+        } catch (err) {
+          if (!isNetworkFailure(err)) throw err;
+          await queueReport({
+            label: `Foreman report — ${numericForm.reportDate}`,
+            endpoint: "/reports/foreman",
+            payload,
+            photos: stagedPhotos.map((p) => p.file),
+          });
+          stagedPhotos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+          setStagedPhotos([]);
+          setSuccess("You're offline — report saved and will submit automatically once you're back online.");
+          setForm(EMPTY_FORM);
+          setSubmissionId(crypto.randomUUID());
+          return;
+        }
       }
 
       // Report data is already saved at this point — a photo failure below
@@ -166,6 +251,12 @@ export default function ForemanReport() {
       );
       setForm(EMPTY_FORM);
       setEditingReportId(null);
+      setExistingAttachments([]);
+      setSubmissionId(crypto.randomUUID());
+      if (hasDraft) {
+        api.delete(`/drafts/FOREMAN?projectId=${projectId}`).catch(() => {});
+        setHasDraft(false);
+      }
     } catch (err) {
       setError(err.message || "Failed to submit report");
     } finally {
@@ -207,6 +298,14 @@ export default function ForemanReport() {
               </button>
             </div>
           )}
+          {hasDraft && !editingReportId && (
+            <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-sm text-amber-800">
+              <span>Continuing from a saved draft</span>
+              <button type="button" onClick={handleDiscardDraft} className="text-amber-700 underline">
+                Discard draft
+              </button>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Project</label>
             <select
@@ -244,68 +343,53 @@ export default function ForemanReport() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Workers on site</label>
-              <input
-                type="number"
-                min="0"
-                inputMode="numeric"
-                value={form.workersOnSite}
-                onChange={(e) => updateField("workersOnSite", e.target.value)}
-                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">% progress</label>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                inputMode="numeric"
-                value={form.percentProgress}
-                onChange={(e) => updateField("percentProgress", e.target.value)}
-                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-              />
-            </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">% progress</label>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              inputMode="numeric"
+              value={form.percentProgress}
+              onChange={(e) => updateField("percentProgress", e.target.value)}
+              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+            />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Labour breakdown</label>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Skilled</label>
-                <input
-                  type="number"
-                  min="0"
-                  inputMode="numeric"
-                  value={form.labourSkilled}
-                  onChange={(e) => updateField("labourSkilled", e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Unskilled</label>
-                <input
-                  type="number"
-                  min="0"
-                  inputMode="numeric"
-                  value={form.labourUnskilled}
-                  onChange={(e) => updateField("labourUnskilled", e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Subcontractor</label>
-                <input
-                  type="number"
-                  min="0"
-                  inputMode="numeric"
-                  value={form.labourSubcontractor}
-                  onChange={(e) => updateField("labourSubcontractor", e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                />
-              </div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Manpower on site</label>
+            <div className="border border-slate-300 rounded-md overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-100">
+                    <th className="text-left px-3 py-2 font-medium text-slate-700">Category</th>
+                    <th className="text-left px-3 py-2 font-medium text-slate-700 w-28">Quantity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {MANPOWER_FIELDS.map((f) => (
+                    <tr key={f.key} className="border-t border-slate-200">
+                      <td className="px-3 py-2 text-slate-700">{f.label}</td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="number"
+                          min="0"
+                          inputMode="numeric"
+                          value={form[f.key]}
+                          onChange={(e) => updateField(f.key, e.target.value)}
+                          className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-base"
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="border-t border-slate-200 bg-slate-50 font-semibold text-slate-900">
+                    <td className="px-3 py-2">Total Workforce</td>
+                    <td className="px-3 py-2">
+                      {MANPOWER_FIELDS.reduce((sum, f) => sum + (Number(form[f.key]) || 0), 0)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -324,12 +408,28 @@ export default function ForemanReport() {
           <TextArea label="Planned activities for tomorrow" value={form.nextDayPlan} onChange={(v) => updateField("nextDayPlan", v)} />
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Site photographs</label>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Site photographs &amp; supporting documents</label>
+            {existingAttachments.length > 0 && (
+              <div className="mb-2">
+                <p className="text-xs text-slate-500 mb-1">Already attached to this report:</p>
+                <div className="flex flex-wrap gap-2">
+                  {existingAttachments.map((a) => (
+                    <AttachmentThumb key={a.id} attachment={a} />
+                  ))}
+                </div>
+              </div>
+            )}
             {stagedPhotos.length > 0 && (
               <div className="grid grid-cols-3 gap-2 mb-2">
                 {stagedPhotos.map((p, i) => (
                   <div key={i} className="relative aspect-square bg-slate-100 rounded-md overflow-hidden">
-                    <img src={p.previewUrl} alt="" className="w-full h-full object-cover" />
+                    {p.file.type.startsWith("image/") ? (
+                      <img src={p.previewUrl} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center p-2 text-center text-xs text-slate-600 break-all">
+                        {p.file.name}
+                      </div>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeStagedPhoto(i)}
@@ -342,11 +442,10 @@ export default function ForemanReport() {
               </div>
             )}
             <label className="block w-full text-center border border-dashed border-slate-300 rounded-md py-3 text-sm text-slate-600">
-              + Add photo
+              + Add document or photo
               <input
                 type="file"
-                accept="image/*"
-                capture="environment"
+                accept="image/*,application/pdf,.doc,.docx"
                 multiple
                 onChange={handlePhotoSelect}
                 className="hidden"
@@ -354,13 +453,25 @@ export default function ForemanReport() {
             </label>
           </div>
 
-          <button
-            type="submit"
-            disabled={submitting || !projectId}
-            className="w-full bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
-          >
-            {submitting ? "Submitting..." : editingReportId ? "Resubmit report" : "Submit report"}
-          </button>
+          <div className="flex gap-2">
+            {!editingReportId && (
+              <button
+                type="button"
+                onClick={handleSaveDraft}
+                disabled={savingDraft || !projectId}
+                className="flex-1 bg-white border border-slate-300 text-slate-700 rounded-md py-3 text-base font-medium disabled:opacity-60"
+              >
+                {savingDraft ? "Saving..." : "Save as draft"}
+              </button>
+            )}
+            <button
+              type="submit"
+              disabled={submitting || !projectId}
+              className="flex-1 bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
+            >
+              {submitting ? "Submitting..." : editingReportId ? "Resubmit report" : "Submit report"}
+            </button>
+          </div>
         </form>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -369,10 +480,19 @@ export default function ForemanReport() {
           <ul className="space-y-2">
             {reports.map((r) => (
               <li key={r.id} className="text-sm border border-slate-100 rounded-md p-2">
-                <span className="font-medium">{new Date(r.reportDate).toLocaleDateString()}</span>
-                {" · "}
-                {r.foremanDetail?.percentProgress}% progress · {r.status}
-                {r.submittedBy?.name ? ` · ${r.submittedBy.name}` : ""}
+                <div>
+                  <span className="font-medium">{new Date(r.reportDate).toLocaleDateString()}</span>
+                  {" · "}
+                  {r.foremanDetail?.percentProgress}% progress · {r.status}
+                  {r.submittedBy?.name ? ` · ${r.submittedBy.name}` : ""}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/actions?sourceReportId=${r.id}&projectId=${projectId}&reportType=FOREMAN`)}
+                  className="text-xs text-blue-600 underline mt-1"
+                >
+                  Raise action from this report
+                </button>
               </li>
             ))}
           </ul>

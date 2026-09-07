@@ -1,25 +1,33 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 
 const PRIORITIES = ["LOW", "MEDIUM", "HIGH"];
 const PRIORITY_COLORS = { LOW: "text-slate-600", MEDIUM: "text-amber-700", HIGH: "text-red-700" };
+const REPORT_TYPE_LABELS = { FOREMAN: "Foreman", QS: "QS", SHE: "SHE", STORES: "Stores", FINANCE: "Finance" };
 
 export default function Actions() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const isManager = user?.role === "TECHNICAL_MANAGER";
+  const isManagement = user?.role === "MANAGEMENT";
+
+  const sourceReportId = searchParams.get("sourceReportId") || "";
+  const sourceProjectId = searchParams.get("projectId") || "";
+  const sourceReportType = searchParams.get("reportType") || "";
 
   const [actions, setActions] = useState([]);
   const [projects, setProjects] = useState([]);
-  const [projectMembers, setProjectMembers] = useState([]);
+  const [technicalManagers, setTechnicalManagers] = useState([]);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [attachmentsByAction, setAttachmentsByAction] = useState({});
 
   const [form, setForm] = useState({
-    projectId: "",
+    projectId: sourceProjectId,
     description: "",
     assignedToId: "",
     dueDate: new Date().toISOString().slice(0, 10),
@@ -29,28 +37,70 @@ export default function Actions() {
   useEffect(() => {
     loadActions();
     api.get("/projects").then(setProjects).catch(() => {});
+    // Non-TM users can only raise an action to the Technical Manager —
+    // fetched separately since the TM has no ProjectAssignment row and
+    // so never shows up in a project's member list.
+    if (!isManager) {
+      api.get("/users/technical-managers").then(setTechnicalManagers).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // For a non-TM raiser with exactly one Technical Manager in the
+  // system (the common case), skip the picker entirely and just assign
+  // to them directly.
   useEffect(() => {
-    if (!form.projectId) {
-      setProjectMembers([]);
-      return;
+    if (!isManager && technicalManagers.length === 1 && !form.assignedToId) {
+      setForm((f) => ({ ...f, assignedToId: technicalManagers[0].id }));
     }
-    api.get(`/projects/${form.projectId}`).then((project) => {
-      const seen = new Set();
-      const members = [];
-      for (const a of project.assignments) {
-        if (!seen.has(a.user.id)) {
-          seen.add(a.user.id);
-          members.push(a.user);
-        }
-      }
-      setProjectMembers(members);
-    });
-  }, [form.projectId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [technicalManagers]);
 
   function loadActions() {
-    api.get("/actions").then(setActions).catch(() => setActions([]));
+    api
+      .get("/actions")
+      .then((list) => {
+        setActions(list);
+        list.forEach((a) => loadAttachments(a.id));
+      })
+      .catch(() => setActions([]));
+  }
+
+  function loadAttachments(actionId) {
+    api
+      .get(`/actions/${actionId}/attachments`)
+      .then((list) => setAttachmentsByAction((prev) => ({ ...prev, [actionId]: list })))
+      .catch(() => {});
+  }
+
+  async function handleEvidenceUpload(actionId, file) {
+    setError("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      await api.upload(`/actions/${actionId}/attachments`, formData);
+      loadAttachments(actionId);
+    } catch (err) {
+      setError(err.message || "Failed to upload evidence");
+    }
+  }
+
+  async function handleEvidenceDownload(attachment) {
+    let blob;
+    try {
+      blob = await api.blob(`/attachments/${attachment.id}/file`);
+    } catch {
+      setError("Failed to download file");
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = attachment.fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   function updateField(field, value) {
@@ -63,12 +113,12 @@ export default function Actions() {
     setSuccess("");
     setSubmitting(true);
     try {
-      await api.post("/actions", form);
+      await api.post("/actions", { ...form, sourceReportId: sourceReportId || undefined });
       setSuccess("Action created.");
       setForm({
-        projectId: "",
+        projectId: sourceProjectId,
         description: "",
-        assignedToId: "",
+        assignedToId: !isManager && technicalManagers.length === 1 ? technicalManagers[0].id : "",
         dueDate: new Date().toISOString().slice(0, 10),
         priority: "MEDIUM",
       });
@@ -125,8 +175,16 @@ export default function Actions() {
           </div>
         )}
 
+        {!isManagement && !isManager && (
         <form onSubmit={handleCreate} className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
           <h2 className="font-medium text-slate-900">Raise a new action</h2>
+
+          {sourceReportId && (
+            <div className="bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-sm text-blue-800">
+              Raised from a {REPORT_TYPE_LABELS[sourceReportType] || sourceReportType} report — this action will be
+              linked back to it.
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Project</label>
@@ -134,7 +192,8 @@ export default function Actions() {
               required
               value={form.projectId}
               onChange={(e) => updateField("projectId", e.target.value)}
-              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+              disabled={!!sourceReportId}
+              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base disabled:bg-slate-100"
             >
               <option value="">Select a project</option>
               {projects.map((p) => (
@@ -156,23 +215,30 @@ export default function Actions() {
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Assign to</label>
-            <select
-              required
-              value={form.assignedToId}
-              onChange={(e) => updateField("assignedToId", e.target.value)}
-              disabled={!form.projectId}
-              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base disabled:bg-slate-100"
-            >
-              <option value="">{form.projectId ? "Select a person" : "Select a project first"}</option>
-              {projectMembers.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name} ({m.role})
-                </option>
-              ))}
-            </select>
-          </div>
+          {technicalManagers.length > 1 ? (
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Raise to</label>
+              <select
+                required
+                value={form.assignedToId}
+                onChange={(e) => updateField("assignedToId", e.target.value)}
+                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+              >
+                <option value="">Select a Technical Manager</option>
+                {technicalManagers.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-sm text-blue-800">
+              This will be raised to the Technical Manager{" "}
+              {technicalManagers[0]?.name ? `(${technicalManagers[0].name})` : ""} — they'll decide what happens
+              next.
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -203,15 +269,18 @@ export default function Actions() {
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || !form.assignedToId}
             className="w-full bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
           >
             {submitting ? "Creating..." : "Create action"}
           </button>
         </form>
+        )}
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <h2 className="font-medium text-slate-900 mb-3">{isManager ? "All actions" : "Actions assigned to me"}</h2>
+          <h2 className="font-medium text-slate-900 mb-3">
+            {isManager ? "All actions" : isManagement ? "Actions raised to the Technical Manager" : "Actions I've raised"}
+          </h2>
           {actions.length === 0 && <p className="text-sm text-slate-500">Nothing here.</p>}
           <ul className="space-y-2">
             {actions.map((a) => (
@@ -222,13 +291,18 @@ export default function Actions() {
                 </div>
                 <p className="text-slate-700">{a.description}</p>
                 <div className="text-xs text-slate-500">
-                  Assigned to: {a.assignedTo.name} · Due {new Date(a.dueDate).toLocaleDateString()}
+                  {isManager || isManagement ? `Raised by: ${a.createdBy.name}` : `Assigned to: ${a.assignedTo.name}`}
+                  {" · "}Due {new Date(a.dueDate).toLocaleDateString()}
                   {a.isOverdue && <span className="text-red-600 font-medium"> · OVERDUE</span>}
                 </div>
+                {a.sourceReport && (
+                  <div className="text-xs text-slate-400">
+                    Raised from: {REPORT_TYPE_LABELS[a.sourceReport.type] || a.sourceReport.type} report (
+                    {new Date(a.sourceReport.reportDate).toLocaleDateString()})
+                  </div>
+                )}
                 <div className="pt-1">
-                  {a.status !== "CLOSED" &&
-                  (a.assignedToId === user?.id || isManager) &&
-                  a.status !== "COMPLETED" ? (
+                  {a.status !== "CLOSED" && isManager && a.status !== "COMPLETED" ? (
                     <label className="flex items-center gap-2 text-xs text-slate-500">
                       Status:
                       <select
@@ -251,6 +325,34 @@ export default function Actions() {
                     >
                       Verify &amp; close
                     </button>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 space-y-1">
+                  {(attachmentsByAction[a.id] ?? []).map((att) => (
+                    <button
+                      key={att.id}
+                      type="button"
+                      onClick={() => handleEvidenceDownload(att)}
+                      className="block text-xs text-blue-600 underline"
+                    >
+                      {att.fileName}
+                    </button>
+                  ))}
+                  {(a.assignedToId === user?.id || isManager) && (
+                    <label className="inline-block text-xs text-slate-500 border border-dashed border-slate-300 rounded px-2 py-1 cursor-pointer">
+                      + Add evidence
+                      <input
+                        type="file"
+                        accept="image/*,application/pdf,.doc,.docx"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = "";
+                          if (file) handleEvidenceUpload(a.id, file);
+                        }}
+                      />
+                    </label>
                   )}
                 </div>
               </li>

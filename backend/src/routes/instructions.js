@@ -53,13 +53,19 @@ router.post("/", requireAuth, requireRole(), async (req, res) => {
   res.status(201).json(instruction);
 });
 
-// Technical Manager/Management see everything (optionally filtered by
-// project); everyone else sees only instructions assigned to them.
+// Technical Manager sees everything (optionally filtered by project);
+// Management sees every instruction too — instructions are always
+// issued by the Technical Manager (only the TM can create one), so
+// this is really just "no extra filter," kept explicit so it reads the
+// same way as the Actions equivalent and stays correct if that ever
+// changes; everyone else sees only instructions assigned to them.
 router.get("/", requireAuth, async (req, res) => {
   const { projectId } = req.query;
   const where = {};
   if (projectId) where.projectId = projectId;
-  if (req.user.role !== "TECHNICAL_MANAGER" && req.user.role !== "MANAGEMENT") {
+  if (req.user.role === "MANAGEMENT") {
+    where.issuedBy = { role: "TECHNICAL_MANAGER" };
+  } else if (req.user.role !== "TECHNICAL_MANAGER") {
     where.personResponsibleId = req.user.id;
   }
 
@@ -84,9 +90,13 @@ router.get("/", requireAuth, async (req, res) => {
 
 const statusUpdateSchema = z.object({ status: z.enum(["OPEN", "IN_PROGRESS", "COMPLETED"]) });
 
-// Person responsible (or Technical Manager) moves it along; closure
-// requires the separate /verify step below (spec: "Technical Manager
-// verification and closure" — not a status the assignee can self-set).
+// Deliberately one-directional, same principle as Actions: the
+// Technical Manager issues an instruction but never moves its status
+// themselves — only the person it was actually sent to can, and it's
+// reflected immediately since it's the same record either side reads.
+// The TM's only lever is the separate /verify step below (spec:
+// "Technical Manager verification and closure") — a distinct final
+// confirmation, not a way to edit the in-progress status.
 router.patch("/:id/status", requireAuth, async (req, res) => {
   const parsed = statusUpdateSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -98,8 +108,14 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
   if (instruction.status === "CLOSED") {
     return res.status(409).json({ error: "Cannot change status of a closed instruction" });
   }
-  if (instruction.personResponsibleId !== req.user.id && req.user.role !== "TECHNICAL_MANAGER") {
+  if (instruction.personResponsibleId !== req.user.id) {
     return res.status(403).json({ error: "Only the person responsible can update this instruction" });
+  }
+  // Only CLOSED was actually protected before this — the person
+  // responsible could silently revert their own instruction from
+  // COMPLETED back to OPEN/IN_PROGRESS with no distinct trail.
+  if (instruction.status === "COMPLETED" && parsed.data.status !== "COMPLETED") {
+    return res.status(409).json({ error: "Cannot revert a completed instruction." });
   }
 
   const updated = await prisma.instruction.update({

@@ -17,6 +17,7 @@ enum Role {
   STORESMAN
   FINANCE
   MANAGEMENT
+  GENERAL_WORKER
 }
 
 enum ProjectStatus {
@@ -69,6 +70,15 @@ model User {
   actionsAssigned Action[] @relation("ActionAssignedTo")
   actionsCreated  Action[] @relation("ActionCreatedBy")
   actionsVerified Action[] @relation("ActionVerifiedBy")
+  projectsManaged Project[] @relation("ProjectManager")
+  requisitionsRequested MaterialRequisition[] @relation("RequisitionRequestedBy")
+  requisitionsFulfilled MaterialRequisition[] @relation("RequisitionFulfilledBy")
+  programmeEntries      ProgrammeEntry[]
+  notifications         Notification[]
+  reportDrafts          ReportDraft[]
+  productivityReportsSubmitted ProductivityReport[] @relation("ProductivityReportSubmitter")
+  productivityReportsReviewed  ProductivityReport[] @relation("ProductivityReportReviewer")
+  productivityReportsFinalized ProductivityReport[] @relation("ProductivityReportFinalizer")
 
   @@map("users")
 }
@@ -85,16 +95,92 @@ model Project {
   startDate         DateTime?
   plannedEndDate    DateTime?
   status            ProjectStatus @default(PLANNING)
+  // Attribution/accountability only — every Technical Manager already has
+  // full access to every project via the role bypass, so this doesn't
+  // gate anything, it just records who's actually responsible for it.
+  projectManagerId  String?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
+  projectManager User? @relation("ProjectManager", fields: [projectManagerId], references: [id])
   assignments ProjectAssignment[]
   reports     Report[]
   attachments Attachment[]
   instructions Instruction[]
   actions      Action[]
+  snapshots    ProjectSnapshot[]
+  requisitions MaterialRequisition[]
+  programmeEntries ProgrammeEntry[]
+  notifications Notification[]
+  reportDrafts  ReportDraft[]
+  productivityReports ProductivityReport[]
 
   @@map("projects")
+}
+
+// A saved-in-progress report — spec Section 20's "employee creates
+// report" as a step distinct from "submits report". Deliberately NOT
+// stored in the Report table: it holds raw, unvalidated form state as
+// JSON (whatever shape the form happens to be in, including empty
+// required fields), so it never needs the strict per-type validation
+// real submission uses, and can never leak into report counts, the
+// approval queue, or analytics — those all query Report, not this.
+model ReportDraft {
+  id         String     @id @default(uuid())
+  userId     String
+  projectId  String
+  type       ReportType
+  reportDate DateTime   @db.Date
+  data       Json
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId, type])
+  @@map("report_drafts")
+}
+
+// One row per project per day — built up over time by a snapshot job
+// so "trend" charts (fund utilisation, progress) have real history to
+// plot instead of a single live-computed point. See routes/projects.js
+// for the shared calculation this is derived from.
+model ProjectSnapshot {
+  id                     String   @id @default(uuid())
+  projectId              String
+  snapshotDate           DateTime @db.Date
+  actualProgress         Int
+  plannedProgress        Int?
+  fundUtilisationPercent Int?
+  totalFundsReceived     Decimal  @db.Decimal(14, 2)
+  totalExpenditure       Decimal  @db.Decimal(14, 2)
+  createdAt              DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, snapshotDate])
+  @@map("project_snapshots")
+}
+
+// The actual approved programme, maintained by the Technical Manager —
+// one row per reporting period with its planned progress. When a project
+// has entries, planned progress is interpolated between the two
+// surrounding periods instead of the linear start/end-date estimate
+// analytics.js falls back to when a project has none yet.
+model ProgrammeEntry {
+  id              String   @id @default(uuid())
+  projectId       String
+  periodDate      DateTime @db.Date
+  plannedProgress Int
+  createdById     String
+  createdAt       DateTime @default(now())
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User    @relation(fields: [createdById], references: [id])
+
+  @@unique([projectId, periodDate])
+  @@map("programme_entries")
 }
 
 // Links a user to a project in a specific role on that project.
@@ -235,13 +321,19 @@ model Attachment {
 }
 
 model ForemanReportDetail {
-  id                  String  @id @default(uuid())
-  reportId            String  @unique
-  siteLocation        String?
+  id                   String  @id @default(uuid())
+  reportId             String  @unique
+  siteLocation         String?
+  // Manpower on site — fixed categories matching the paper form's
+  // section 4 table; workersOnSite is the Total Workforce row, computed
+  // server-side as the sum of the categories below rather than trusted
+  // from the client.
+  electricalSupervisors Int    @default(0)
+  electricians          Int    @default(0)
+  electricalAssistants  Int    @default(0)
+  generalHands          Int    @default(0)
+  sheOfficersOnSite     Int    @default(0)
   workersOnSite        Int     @default(0)
-  labourSkilled        Int     @default(0)
-  labourUnskilled      Int     @default(0)
-  labourSubcontractor  Int     @default(0)
   workCompleted        String?
   workInProgress       String?
   percentProgress      Int     @default(0)
@@ -260,14 +352,24 @@ model ForemanReportDetail {
 // ---------- QS (header + line items, per spec Section 6/7) ----------
 
 model QsReportDetail {
-  id       String  @id @default(uuid())
-  reportId String  @unique
-  comments String?
+  id                String  @id @default(uuid())
+  reportId          String  @unique
+  comments          String?
+  // Non-quantity commercial matters (disputes, pricing queries, pending
+  // instructions with cost impact) — distinct from the line-level
+  // variationReference, which is specific to one BOQ item's variation.
+  commercialIssues  String?
 
   report Report        @relation(fields: [reportId], references: [id], onDelete: Cascade)
   lines  QsReportLine[]
 
   @@map("qs_report_details")
+}
+
+enum VariationStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 model QsReportLine {
@@ -286,6 +388,7 @@ model QsReportLine {
   measurements        String?
   valuationAmount     Decimal? @db.Decimal(14, 2)
   variationReference  String?
+  variationStatus     VariationStatus?
   comments            String?
 
   qsReportDetail QsReportDetail @relation(fields: [qsReportDetailId], references: [id], onDelete: Cascade)
@@ -301,10 +404,14 @@ model QsReportLine {
 model SheReportDetail {
   id                    String  @id @default(uuid())
   reportId              String  @unique
+  workersOnSite         Int     @default(0)
   toolboxTalksConducted String?
   safetyInspections     String?
   ppeCompliance         String?
+  hazardsIdentified     String?
   correctiveActions     String?
+  environmentalIssues   String?
+  safetyObservations    String?
   incidentCount         Int     @default(0)
   nearMissCount         Int     @default(0)
   incidentsDescription  String?
@@ -349,10 +456,49 @@ model StockTransactionLine {
   supplier              String?
   deliveryReference     String?
   notes                 String?
+  // Server-derived, never trusted from the client (same rule as QS's
+  // balanceQuantity) — the running balance for this item immediately
+  // before and after this one movement, computed from every prior
+  // APPROVED line for the same item on the same project.
+  openingBalance        Decimal        @default(0) @db.Decimal(14, 2)
+  closingBalance        Decimal        @default(0) @db.Decimal(14, 2)
 
   storesReportDetail StoresReportDetail @relation(fields: [storesReportDetailId], references: [id], onDelete: Cascade)
 
   @@map("stock_transaction_lines")
+}
+
+// ---------- Material requisitions (per spec Section 9) ----------
+
+enum RequisitionStatus {
+  PENDING
+  FULFILLED
+  CANCELLED
+}
+
+// A real request/fulfil workflow — distinct from the free-text
+// "shortagesAndRequirements" note on a Stores report, which is just a
+// comment, not a tracked item with a status.
+model MaterialRequisition {
+  id                String            @id @default(uuid())
+  projectId         String
+  itemName          String
+  quantityRequested Decimal           @db.Decimal(14, 2)
+  unit              String?
+  urgency           Priority          @default(MEDIUM)
+  status            RequisitionStatus @default(PENDING)
+  notes             String?
+  requestedById     String
+  requestedAt       DateTime          @default(now())
+  fulfilledById     String?
+  fulfilledAt       DateTime?
+  fulfillmentNotes  String?
+
+  project     Project @relation(fields: [projectId], references: [id])
+  requestedBy User    @relation("RequisitionRequestedBy", fields: [requestedById], references: [id])
+  fulfilledBy User?   @relation("RequisitionFulfilledBy", fields: [fulfilledById], references: [id])
+
+  @@map("material_requisitions")
 }
 
 // ---------- Finance (per spec Section 10) ----------
@@ -403,6 +549,114 @@ model FinanceTransactionLine {
   financeReportDetail FinanceReportDetail @relation(fields: [financeReportDetailId], references: [id], onDelete: Cascade)
 
   @@map("finance_transaction_lines")
+}
+
+// ---------- General Worker daily productivity report ----------
+// A three-stage sequential form, not the single submit->approve/return
+// cycle every other report type uses: the General Worker fills sections
+// A-I and submits (SUBMITTED); the Foreman then adds section J, the
+// supervisor review (SUPERVISOR_REVIEWED); the Technical Manager then
+// adds sections K/L, the management control and follow-up sections, and
+// that's final (COMPLETED). Each stage adds its own fields to the same
+// record rather than replacing what came before, so there's no
+// approve/return branch here — once a stage is done it's done.
+//
+// The line-item tables on the paper form (work targets, work not
+// completed, delays, materials required, tomorrow's plan) are stored as
+// Json rather than five more child tables — none of them feed cross-
+// report analytics the way QS/Stores lines do, they're just structured
+// content for this one report.
+enum ProductivityReportStatus {
+  SUBMITTED
+  SUPERVISOR_REVIEWED
+  COMPLETED
+}
+
+model ProductivityReport {
+  id            String                   @id @default(uuid())
+  projectId     String
+  submittedById String
+  reportDate    DateTime
+  status        ProductivityReportStatus @default(SUBMITTED)
+  submittedAt   DateTime                 @default(now())
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+
+  // Header (worker-filled)
+  employeeIdNumber String?
+  department       String?
+  position         String?
+  siteLocation     String?
+  supervisorName   String?
+  shift            String?
+
+  // A. Daily work targets — [{ task, unit, target, actual, startTime, endTime }]
+  workTargets               Json
+  totalTarget                Decimal? @db.Decimal(10, 2)
+  totalCompleted              Decimal? @db.Decimal(10, 2)
+  overallAchievementPercent  Int?
+
+  // B. Work completed today (free text)
+  workCompletedToday String?
+
+  // C. Work not completed — [{ task, remainingWork, reason }]
+  workNotCompleted Json?
+
+  // D. Delays / time lost
+  delayExperienced Boolean  @default(false)
+  totalDelayHours  Decimal? @db.Decimal(6, 2)
+  delays           Json? // [{ time, duration, reason, cause, verified }]
+  delayCategories  String[]
+
+  // E. Materials / tools required — [{ item, qtyRequired, available, shortage }]
+  materialsRequired Json?
+
+  // F. Quality check
+  qualityStandardMet String? // YES | NO | REQUIRES_CORRECTION
+  reworkDetails       String?
+
+  // G. End-of-day summary
+  normalHours            Decimal? @db.Decimal(5, 2)
+  actualHoursWorked      Decimal? @db.Decimal(5, 2)
+  productiveHours        Decimal? @db.Decimal(5, 2)
+  delayHours             Decimal? @db.Decimal(5, 2)
+  overtimeRequested      Boolean  @default(false)
+  overtimeHoursRequested Decimal? @db.Decimal(5, 2)
+  overtimeReason         String?
+  expectedOvertimeOutput String?
+
+  // H. Tomorrow's plan — [{ task, targetQuantity, materialsRequired }]
+  tomorrowPlan Json?
+
+  // I. Employee declaration
+  employeeSignatureName String?
+
+  // J. Supervisor (Foreman) review
+  reviewedById             String?
+  reviewedAt               DateTime?
+  targetAchievementPercent Int?
+  productivityRating       String? // EXCELLENT | GOOD | ATTENTION | CRITICAL
+  delayJustified           String? // YES | NO | PARTIAL
+  overtimeRecommendation   String? // APPROVED | NOT_APPROVED | NA
+  supervisorComments       String?
+  supervisorSignatureName  String?
+
+  // K. Daily productivity control — Management use (TM fills; TM/Management-only to view)
+  finalizedById         String?
+  finalizedAt           DateTime?
+  productivityScore     Int?
+  overtimeHoursApproved Decimal? @db.Decimal(5, 2)
+  overtimeCost          Decimal? @db.Decimal(10, 2)
+
+  // L. Management action / follow-up (TM fills; TM/Management-only to view)
+  managementActions String[]
+
+  project     Project @relation(fields: [projectId], references: [id])
+  submittedBy User    @relation("ProductivityReportSubmitter", fields: [submittedById], references: [id])
+  reviewedBy  User?   @relation("ProductivityReportReviewer", fields: [reviewedById], references: [id])
+  finalizedBy User?   @relation("ProductivityReportFinalizer", fields: [finalizedById], references: [id])
+
+  @@map("productivity_reports")
 }
 
 // ---------- Instructions & Actions (Step 4, per spec Section 13/14) ----------
@@ -475,4 +729,51 @@ model Action {
   attachments  Attachment[]
 
   @@map("actions")
+}
+
+// ---------- Notifications (spec Section 18) ----------
+
+enum NotificationType {
+  REPORT_NOT_SUBMITTED
+  REPORT_RETURNED
+  REPORT_AWAITING_APPROVAL
+  ACTION_DUE_SOON
+  ACTION_OVERDUE
+  MATERIAL_SHORTAGE
+  REQUISITION_SUBMITTED
+  SAFETY_INCIDENT
+  PROGRESS_BEHIND_PLAN
+  FUND_UTILISATION_THRESHOLD
+  // Generic — one per entry in computeProjectAnalytics().exceptions, so
+  // any cross-domain alert added there (spec Section 21) automatically
+  // becomes a proactive notification too, not just page data.
+  PROJECT_EXCEPTION
+}
+
+// Some types are created inline at the moment the triggering event
+// happens (a report gets returned, a requisition is raised) — real-time,
+// no polling needed. The rest (not-submitted-today, due-soon, overdue,
+// behind-plan, fund-threshold) are time-based conditions with no single
+// triggering request, so they're generated by an opportunistic scan
+// (lib/notifications.js), same "no real cron yet" pattern as
+// ensureTodaySnapshots. dedupeKey makes re-running that scan safe —
+// upserting on it means the same condition never creates a second
+// notification, and doesn't reset one already marked read.
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  projectId String?
+  link      String?
+  dedupeKey String
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@map("notifications")
 }

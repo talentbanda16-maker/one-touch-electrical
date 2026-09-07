@@ -4,14 +4,31 @@ const prisma = require("../prisma");
 const { recordAudit } = require("../audit");
 const { requireAuth } = require("../middleware/auth");
 const { requireRole, requireProjectAccess } = require("../middleware/rbac");
+const { getApprovedStockBalances } = require("../lib/departmentAnalytics");
+const { notifyManagers } = require("../lib/notifications");
 
 const router = express.Router();
 
-// Shared guard for every PATCH (correction/resubmit) route below: only
-// a RETURNED report can be corrected, and only by whoever submitted it
-// (or the Technical Manager) — matches the approval workflow in
-// spec Section 2.4/20 ("returned reports retain their history and
-// correction trail").
+// Upper bounds on numeric fields — without these, a value that overflows
+// the underlying Postgres column (int4 tops out around 2.1 billion;
+// these Decimal(14,2) columns top out at 999,999,999,999.99) reaches
+// Prisma un-validated and throws, surfacing as a bare unhandled 500
+// instead of a clean 400. The caps below are generous for any real
+// headcount/quantity/amount while staying safely inside both the
+// column's real range and zod/JS's own safe-integer range.
+const MAX_HEADCOUNT = 100000;
+const MAX_QUANTITY = 999999999;
+
+// Shared guard for every PATCH (correction/resubmit/edit) route below.
+// Two cases:
+//  - the original submitter correcting a RETURNED report (the existing
+//    resubmit flow, spec Section 2.4/20 — "returned reports retain their
+//    history and correction trail")
+//  - the Technical Manager editing a report directly, either while it's
+//    still SUBMITTED (in place, from the Approvals screen) or after
+//    returning it. Content stays attributed to the original submitter
+//    (submittedById is never changed here) — the audit log is what
+//    records that the TM, not the submitter, made this particular edit.
 async function assertReturnedAndOwned(req, res, reportId, expectedType) {
   const report = await prisma.report.findUnique({ where: { id: reportId } });
   if (!report) {
@@ -22,15 +39,34 @@ async function assertReturnedAndOwned(req, res, reportId, expectedType) {
     res.status(400).json({ error: "Report type mismatch" });
     return null;
   }
+
+  if (req.user.role === "TECHNICAL_MANAGER") {
+    if (report.status !== "SUBMITTED" && report.status !== "RETURNED") {
+      res.status(409).json({ error: `Cannot edit a report with status ${report.status}` });
+      return null;
+    }
+    return report;
+  }
+
   if (report.status !== "RETURNED") {
     res.status(409).json({ error: `Cannot correct a report with status ${report.status}` });
     return null;
   }
-  if (report.submittedById !== req.user.id && req.user.role !== "TECHNICAL_MANAGER") {
+  if (report.submittedById !== req.user.id) {
     res.status(403).json({ error: "Only the original submitter can correct this report" });
     return null;
   }
   return report;
+}
+
+// Distinguishes an audit entry for "the Technical Manager edited this
+// report while it was pending review" from the pre-existing "submitter
+// corrected and resubmitted a returned report" — same PATCH route,
+// different actor/situation, worth telling apart in the audit log.
+function editAuditAction(req, reportBeforeUpdate) {
+  return req.user.role === "TECHNICAL_MANAGER" && reportBeforeUpdate.status === "SUBMITTED"
+    ? "REPORT_EDITED_BY_TM"
+    : "REPORT_RESUBMITTED";
 }
 
 const foremanSchema = z.object({
@@ -40,10 +76,14 @@ const foremanSchema = z.object({
   // retried offline-sync submit is safely idempotent — see Report.submissionId.
   submissionId: z.string().min(1),
   siteLocation: z.string().optional(),
-  workersOnSite: z.number().int().nonnegative().default(0),
-  labourSkilled: z.number().int().nonnegative().default(0),
-  labourUnskilled: z.number().int().nonnegative().default(0),
-  labourSubcontractor: z.number().int().nonnegative().default(0),
+  // Manpower on site — fixed categories (paper form section 4); the
+  // Total Workforce figure is computed server-side from these, not
+  // trusted from the client.
+  electricalSupervisors: z.number().int().nonnegative().max(MAX_HEADCOUNT).default(0),
+  electricians: z.number().int().nonnegative().max(MAX_HEADCOUNT).default(0),
+  electricalAssistants: z.number().int().nonnegative().max(MAX_HEADCOUNT).default(0),
+  generalHands: z.number().int().nonnegative().max(MAX_HEADCOUNT).default(0),
+  sheOfficersOnSite: z.number().int().nonnegative().max(MAX_HEADCOUNT).default(0),
   workCompleted: z.string().min(1, "Work completed today is required"),
   workInProgress: z.string().optional(),
   percentProgress: z.number().int().min(0).max(100).default(0),
@@ -54,6 +94,16 @@ const foremanSchema = z.object({
   instructionsReceived: z.string().optional(),
   nextDayPlan: z.string().optional(),
 });
+
+function workforceTotal(detail) {
+  return (
+    detail.electricalSupervisors +
+    detail.electricians +
+    detail.electricalAssistants +
+    detail.generalHands +
+    detail.sheOfficersOnSite
+  );
+}
 
 // Foreman submits for their assigned project; Technical Manager can submit for any.
 router.post(
@@ -84,7 +134,7 @@ router.post(
         reportDate: new Date(reportDate),
         submittedById: req.user.id,
         submissionId,
-        foremanDetail: { create: detail },
+        foremanDetail: { create: { ...detail, workersOnSite: workforceTotal(detail) } },
       },
       include: { foremanDetail: true },
     });
@@ -95,6 +145,15 @@ router.post(
       entityType: "Report",
       entityId: report.id,
       metadata: { type: "FOREMAN", projectId },
+    });
+
+    await notifyManagers({
+      type: "REPORT_AWAITING_APPROVAL",
+      title: "Foreman report awaiting approval",
+      message: `A Foreman report was submitted and is awaiting your review.`,
+      projectId,
+      link: "/approvals",
+      dedupeKey: `REPORT_AWAITING_APPROVAL:${report.id}`,
     });
 
     res.status(201).json(report);
@@ -155,14 +214,14 @@ router.patch("/foreman/:id", requireAuth, requireRole("FOREMAN"), async (req, re
       status: "SUBMITTED",
       returnReason: null,
       submittedAt: new Date(),
-      foremanDetail: { update: detail },
+      foremanDetail: { update: { ...detail, workersOnSite: workforceTotal(detail) } },
     },
     include: { foremanDetail: true },
   });
 
   await recordAudit({
     userId: req.user.id,
-    action: "REPORT_RESUBMITTED",
+    action: editAuditAction(req, report),
     entityType: "Report",
     entityId: report.id,
     metadata: { type: "FOREMAN" },
@@ -171,15 +230,21 @@ router.patch("/foreman/:id", requireAuth, requireRole("FOREMAN"), async (req, re
   res.json(updated);
 });
 
+const VARIATION_STATUSES = ["PENDING", "APPROVED", "REJECTED"];
+
 const qsLineSchema = z.object({
   boqItemNumber: z.string().min(1),
   description: z.string().min(1),
-  contractQuantity: z.number().nonnegative(),
-  quantityToday: z.number().nonnegative(),
-  cumulativeQuantity: z.number().nonnegative(),
+  contractQuantity: z.number().nonnegative().max(MAX_QUANTITY),
+  quantityToday: z.number().nonnegative().max(MAX_QUANTITY),
+  cumulativeQuantity: z.number().nonnegative().max(MAX_QUANTITY),
   measurements: z.string().optional(),
-  valuationAmount: z.number().nonnegative().optional(),
+  valuationAmount: z.number().nonnegative().max(MAX_QUANTITY).optional(),
   variationReference: z.string().optional(),
+  // Only meaningful once variationReference is set, but not enforced as
+  // a hard requirement — a QS may flag a variation before it's formally
+  // referenced.
+  variationStatus: z.enum(VARIATION_STATUSES).optional(),
   comments: z.string().optional(),
 });
 
@@ -188,6 +253,7 @@ const qsSchema = z.object({
   reportDate: z.string().date(),
   submissionId: z.string().min(1),
   comments: z.string().optional(),
+  commercialIssues: z.string().optional(),
   // A QS report with no line items says nothing — same principle as
   // the Finance/Stores header+line pattern in spec Section 9.3.
   lines: z.array(qsLineSchema).min(1, "At least one BOQ line item is required"),
@@ -214,7 +280,7 @@ router.post(
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.flatten() });
     }
-    const { projectId, reportDate, submissionId, comments, lines } = parsed.data;
+    const { projectId, reportDate, submissionId, comments, commercialIssues, lines } = parsed.data;
 
     const existing = await prisma.report.findUnique({
       where: { submissionId },
@@ -234,6 +300,7 @@ router.post(
         qsDetail: {
           create: {
             comments,
+            commercialIssues,
             lines: { create: lines.map(deriveQsLine) },
           },
         },
@@ -247,6 +314,15 @@ router.post(
       entityType: "Report",
       entityId: report.id,
       metadata: { type: "QS", projectId, lineCount: lines.length },
+    });
+
+    await notifyManagers({
+      type: "REPORT_AWAITING_APPROVAL",
+      title: "QS report awaiting approval",
+      message: "A QS report was submitted and is awaiting your review.",
+      projectId,
+      link: "/approvals",
+      dedupeKey: `REPORT_AWAITING_APPROVAL:${report.id}`,
     });
 
     res.status(201).json(report);
@@ -303,7 +379,7 @@ router.patch("/qs/:id", requireAuth, requireRole("QS"), async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
-  const { reportDate, comments, lines } = parsed.data;
+  const { reportDate, comments, commercialIssues, lines } = parsed.data;
 
   const updated = await prisma.report.update({
     where: { id: report.id },
@@ -315,6 +391,7 @@ router.patch("/qs/:id", requireAuth, requireRole("QS"), async (req, res) => {
       qsDetail: {
         update: {
           comments,
+          commercialIssues,
           lines: { deleteMany: {}, create: lines.map(deriveQsLine) },
         },
       },
@@ -324,7 +401,7 @@ router.patch("/qs/:id", requireAuth, requireRole("QS"), async (req, res) => {
 
   await recordAudit({
     userId: req.user.id,
-    action: "REPORT_RESUBMITTED",
+    action: editAuditAction(req, report),
     entityType: "Report",
     entityId: report.id,
     metadata: { type: "QS", lineCount: lines.length },
@@ -337,12 +414,16 @@ const sheSchema = z.object({
   projectId: z.string().uuid(),
   reportDate: z.string().date(),
   submissionId: z.string().min(1),
+  workersOnSite: z.number().int().nonnegative().max(MAX_HEADCOUNT).default(0),
   toolboxTalksConducted: z.string().min(1, "Toolbox talks conducted is required"),
   safetyInspections: z.string().optional(),
   ppeCompliance: z.string().optional(),
+  hazardsIdentified: z.string().optional(),
   correctiveActions: z.string().optional(),
-  incidentCount: z.number().int().nonnegative().default(0),
-  nearMissCount: z.number().int().nonnegative().default(0),
+  environmentalIssues: z.string().optional(),
+  safetyObservations: z.string().optional(),
+  incidentCount: z.number().int().nonnegative().max(MAX_HEADCOUNT).default(0),
+  nearMissCount: z.number().int().nonnegative().max(MAX_HEADCOUNT).default(0),
   incidentsDescription: z.string().optional(),
 });
 
@@ -385,6 +466,26 @@ router.post(
       entityId: report.id,
       metadata: { type: "SHE", projectId, incidentCount: detail.incidentCount },
     });
+
+    await notifyManagers({
+      type: "REPORT_AWAITING_APPROVAL",
+      title: "SHE report awaiting approval",
+      message: "A SHE report was submitted and is awaiting your review.",
+      projectId,
+      link: "/approvals",
+      dedupeKey: `REPORT_AWAITING_APPROVAL:${report.id}`,
+    });
+
+    if (detail.incidentCount > 0) {
+      await notifyManagers({
+        type: "SAFETY_INCIDENT",
+        title: "Safety incident recorded",
+        message: `${detail.incidentCount} incident(s) recorded in today's SHE report.${detail.incidentsDescription ? " " + detail.incidentsDescription : ""}`,
+        projectId,
+        link: "/analytics/she",
+        dedupeKey: `SAFETY_INCIDENT:${report.id}`,
+      });
+    }
 
     res.status(201).json(report);
   }
@@ -450,7 +551,7 @@ router.patch("/she/:id", requireAuth, requireRole("SHE_OFFICER"), async (req, re
 
   await recordAudit({
     userId: req.user.id,
-    action: "REPORT_RESUBMITTED",
+    action: editAuditAction(req, report),
     entityType: "Report",
     entityId: report.id,
     metadata: { type: "SHE" },
@@ -464,9 +565,9 @@ const STOCK_DIRECTIONS = ["RECEIVED", "ISSUED", "RETURNED", "DAMAGED_LOST"];
 const stockLineSchema = z.object({
   itemName: z.string().min(1),
   direction: z.enum(STOCK_DIRECTIONS),
-  quantity: z.number().nonnegative(),
+  quantity: z.number().nonnegative().max(MAX_QUANTITY),
   unit: z.string().optional(),
-  unitCost: z.number().nonnegative().optional(),
+  unitCost: z.number().nonnegative().max(MAX_QUANTITY).optional(),
   supplier: z.string().optional(),
   deliveryReference: z.string().optional(),
   notes: z.string().optional(),
@@ -481,6 +582,23 @@ const storesSchema = z.object({
   // Same rule as QS — a stores report with no movements says nothing (spec 9.3).
   lines: z.array(stockLineSchema).min(1, "At least one stock transaction line is required"),
 });
+
+// Stamps each line with opening/closing balance — computed here, not
+// trusted from the client, same principle as deriveQsLine. Lines for the
+// same item within one submission carry the balance forward between
+// each other, not just from prior approved history.
+async function deriveStockLines(projectId, lines) {
+  const itemNames = [...new Set(lines.map((l) => l.itemName))];
+  const balances = await getApprovedStockBalances(projectId, itemNames);
+
+  return lines.map((line) => {
+    const opening = balances.get(line.itemName) ?? 0;
+    const delta = line.direction === "RECEIVED" || line.direction === "RETURNED" ? line.quantity : -line.quantity;
+    const closing = opening + delta;
+    balances.set(line.itemName, closing);
+    return { ...line, openingBalance: opening, closingBalance: closing };
+  });
+}
 
 router.post(
   "/stores",
@@ -502,6 +620,8 @@ router.post(
       return res.status(200).json(existing);
     }
 
+    const derivedLines = await deriveStockLines(projectId, lines);
+
     const report = await prisma.report.create({
       data: {
         projectId,
@@ -513,7 +633,7 @@ router.post(
           create: {
             shortagesAndRequirements,
             comments,
-            lines: { create: lines },
+            lines: { create: derivedLines },
           },
         },
       },
@@ -527,6 +647,26 @@ router.post(
       entityId: report.id,
       metadata: { type: "STORES", projectId, lineCount: lines.length },
     });
+
+    await notifyManagers({
+      type: "REPORT_AWAITING_APPROVAL",
+      title: "Stores report awaiting approval",
+      message: "A Stores report was submitted and is awaiting your review.",
+      projectId,
+      link: "/approvals",
+      dedupeKey: `REPORT_AWAITING_APPROVAL:${report.id}`,
+    });
+
+    if (shortagesAndRequirements) {
+      await notifyManagers({
+        type: "MATERIAL_SHORTAGE",
+        title: "Material shortage reported",
+        message: shortagesAndRequirements,
+        projectId,
+        link: "/analytics/stores",
+        dedupeKey: `MATERIAL_SHORTAGE:${report.id}`,
+      });
+    }
 
     res.status(201).json(report);
   }
@@ -583,6 +723,7 @@ router.patch("/stores/:id", requireAuth, requireRole("STORESMAN"), async (req, r
     return res.status(400).json({ error: parsed.error.flatten() });
   }
   const { reportDate, shortagesAndRequirements, comments, lines } = parsed.data;
+  const derivedLines = await deriveStockLines(report.projectId, lines);
 
   const updated = await prisma.report.update({
     where: { id: report.id },
@@ -595,7 +736,7 @@ router.patch("/stores/:id", requireAuth, requireRole("STORESMAN"), async (req, r
         update: {
           shortagesAndRequirements,
           comments,
-          lines: { deleteMany: {}, create: lines },
+          lines: { deleteMany: {}, create: derivedLines },
         },
       },
     },
@@ -604,7 +745,7 @@ router.patch("/stores/:id", requireAuth, requireRole("STORESMAN"), async (req, r
 
   await recordAudit({
     userId: req.user.id,
-    action: "REPORT_RESUBMITTED",
+    action: editAuditAction(req, report),
     entityType: "Report",
     entityId: report.id,
     metadata: { type: "STORES", lineCount: lines.length },
@@ -630,7 +771,7 @@ const FINANCE_CATEGORIES = [
 const financeLineSchema = z.object({
   type: z.enum(FINANCE_LINE_TYPES),
   category: z.enum(FINANCE_CATEGORIES),
-  amount: z.number().nonnegative(),
+  amount: z.number().nonnegative().max(MAX_QUANTITY),
   description: z.string().optional(),
   paymentReference: z.string().optional(),
 });
@@ -686,6 +827,15 @@ router.post(
       entityType: "Report",
       entityId: report.id,
       metadata: { type: "FINANCE", projectId, lineCount: lines.length },
+    });
+
+    await notifyManagers({
+      type: "REPORT_AWAITING_APPROVAL",
+      title: "Finance report awaiting approval",
+      message: "A Finance report was submitted and is awaiting your review.",
+      projectId,
+      link: "/approvals",
+      dedupeKey: `REPORT_AWAITING_APPROVAL:${report.id}`,
     });
 
     res.status(201).json(report);
@@ -763,7 +913,7 @@ router.patch("/finance/:id", requireAuth, requireRole("FINANCE"), async (req, re
 
   await recordAudit({
     userId: req.user.id,
-    action: "REPORT_RESUBMITTED",
+    action: editAuditAction(req, report),
     entityType: "Report",
     entityId: report.id,
     metadata: { type: "FINANCE", lineCount: lines.length },

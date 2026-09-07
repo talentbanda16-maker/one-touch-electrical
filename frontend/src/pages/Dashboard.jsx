@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+
+const DEPARTMENT_LABELS = { FOREMAN: "Foreman", QS: "QS", SHE: "SHE", STORES: "Stores", FINANCE: "Finance" };
 
 const ROLE_LABELS = {
   TECHNICAL_MANAGER: "Technical Manager",
@@ -11,6 +14,7 @@ const ROLE_LABELS = {
   STORESMAN: "Storesman",
   FINANCE: "Finance",
   MANAGEMENT: "Management",
+  GENERAL_WORKER: "General Worker",
 };
 
 const REPORT_TYPE_ROUTES = {
@@ -43,18 +47,26 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
-        <div>
+        <div className="min-w-0 max-w-[42%]">
           <p className="text-sm text-slate-500">Signed in as</p>
-          <p className="font-medium text-slate-900">
+          <p className="font-medium text-slate-900 truncate">
             {user?.name} · {ROLE_LABELS[user?.role] || user?.role}
           </p>
         </div>
-        <button
-          onClick={logout}
-          className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
-        >
-          Log out
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => navigate("/settings")}
+            className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+          >
+            Settings
+          </button>
+          <button
+            onClick={logout}
+            className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+          >
+            Log out
+          </button>
+        </div>
       </header>
 
       <main className="p-4 space-y-4">
@@ -107,6 +119,117 @@ export default function Dashboard() {
           </div>
         )}
 
+        {user?.role === "TECHNICAL_MANAGER" && summary?.reportsTodayByType && summary.reportsToday > 0 && (
+          <div className="bg-white rounded-xl border border-slate-200 p-4">
+            <h2 className="text-sm font-medium text-slate-700 mb-2">Reports submitted today by department</h2>
+            <div style={{ width: "100%", height: 140 }}>
+              <ResponsiveContainer>
+                <BarChart
+                  data={Object.entries(summary.reportsTodayByType).map(([type, count]) => ({
+                    name: DEPARTMENT_LABELS[type] || type,
+                    count,
+                  }))}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Bar dataKey="count" fill="#2563eb" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
+
+        {(user?.role === "TECHNICAL_MANAGER" || user?.role === "MANAGEMENT") && (
+          <button
+            onClick={() => navigate("/dashboard/management")}
+            className="w-full bg-blue-600 text-white rounded-xl py-4 text-base font-medium"
+          >
+            Management dashboard
+          </button>
+        )}
+
+        {user?.role === "TECHNICAL_MANAGER" && (
+          <button
+            onClick={() => navigate("/projects")}
+            className="w-full bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-sm font-medium"
+          >
+            Manage projects
+          </button>
+        )}
+
+        {user?.role === "TECHNICAL_MANAGER" && (
+          <button
+            onClick={() => navigate("/users")}
+            className="w-full bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-sm font-medium"
+          >
+            Manage users
+          </button>
+        )}
+
+        {(user?.role === "TECHNICAL_MANAGER" || user?.role === "MANAGEMENT") && (
+          <button
+            onClick={() => navigate("/audit-log")}
+            className="w-full bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-sm font-medium"
+          >
+            Audit log
+          </button>
+        )}
+
+        {(user?.role === "TECHNICAL_MANAGER" || user?.role === "MANAGEMENT") && (
+          <button
+            onClick={() => navigate("/analytics")}
+            className="w-full bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-sm font-medium"
+          >
+            Project progress &amp; finance
+          </button>
+        )}
+
+        {user?.role === "TECHNICAL_MANAGER" && (
+          <button
+            onClick={() => navigate("/reports/combined")}
+            className="w-full bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-sm font-medium"
+          >
+            Combined report (PDF/Excel)
+          </button>
+        )}
+
+        {(user?.role === "TECHNICAL_MANAGER" || user?.role === "MANAGEMENT") && (
+          <div className="grid grid-cols-3 gap-3">
+            <button
+              onClick={() => navigate("/analytics/foreman")}
+              className="bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-xs font-medium"
+            >
+              Foreman
+            </button>
+            <button
+              onClick={() => navigate("/analytics/qs")}
+              className="bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-xs font-medium"
+            >
+              QS / BOQ
+            </button>
+            <button
+              onClick={() => navigate("/analytics/stores")}
+              className="bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-xs font-medium"
+            >
+              Stores
+            </button>
+            <button
+              onClick={() => navigate("/analytics/she")}
+              className="bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-xs font-medium"
+            >
+              SHE
+            </button>
+            <button
+              onClick={() => navigate("/analytics/finance")}
+              className="bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-xs font-medium"
+            >
+              Finance
+            </button>
+          </div>
+        )}
+
         {user?.role === "TECHNICAL_MANAGER" && (
           <button
             onClick={() => navigate("/approvals")}
@@ -155,6 +278,30 @@ export default function Dashboard() {
             Submit finance report
           </button>
         )}
+        {user?.role === "GENERAL_WORKER" && (
+          <button
+            onClick={() => navigate("/reports/productivity")}
+            className="w-full bg-blue-600 text-white rounded-xl py-4 text-base font-medium"
+          >
+            Submit daily productivity report
+          </button>
+        )}
+        {user?.role === "FOREMAN" && (
+          <button
+            onClick={() => navigate("/productivity/review")}
+            className="w-full bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-sm font-medium"
+          >
+            Review productivity reports
+          </button>
+        )}
+        {(user?.role === "TECHNICAL_MANAGER" || user?.role === "MANAGEMENT") && (
+          <button
+            onClick={() => navigate("/productivity/finalize")}
+            className="w-full bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-sm font-medium"
+          >
+            Productivity reports
+          </button>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
           <button
@@ -171,12 +318,23 @@ export default function Dashboard() {
           </button>
         </div>
 
+        {["TECHNICAL_MANAGER", "FINANCE", "MANAGEMENT"].includes(user?.role) && (
+          <button
+            onClick={() => navigate("/reports/generate")}
+            className="w-full bg-white border border-slate-300 text-slate-700 rounded-xl py-3 text-sm font-medium"
+          >
+            Reports (progress / financial / department)
+          </button>
+        )}
+
         <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-slate-500">
           {user?.role === "TECHNICAL_MANAGER"
-            ? "Approve/return reports, issue instructions, and track actions above. Progress/finance analytics and the combined report land in Steps 5–6."
+            ? "Approve/return reports, issue instructions, and track actions above."
             : ["FOREMAN", "QS", "SHE_OFFICER", "STORESMAN", "FINANCE"].includes(user?.role)
             ? "Reports you submit go to the Technical Manager for approval — check back if one is returned for correction."
-            : "Role-specific reporting forms and dashboards land in Step 2–4."}
+            : user?.role === "GENERAL_WORKER"
+            ? "Your daily productivity report goes to your Foreman for review, then the Technical Manager for sign-off."
+            : "You have read-only oversight access — view progress, finance, and audit data above; you can't submit or edit anything."}
         </div>
       </main>
     </div>

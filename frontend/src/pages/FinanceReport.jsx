@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { api, getAccessToken } from "../api";
+import { api } from "../api";
+import { queueReport, isNetworkFailure } from "../lib/offlineQueue";
+import AttachmentThumb from "../components/AttachmentThumb";
 
 const EMPTY_LINE = {
-  type: "EXPENDITURE",
-  category: "MATERIALS",
   amount: "",
   description: "",
   paymentReference: "",
@@ -51,13 +51,21 @@ export default function FinanceReport() {
   const [projectId, setProjectId] = useState("");
   const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
   const [comments, setComments] = useState("");
-  const [lines, setLines] = useState([{ ...EMPTY_LINE }]);
+  const [lines, setLines] = useState([]);
   const [reports, setReports] = useState([]);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [stagedPhotos, setStagedPhotos] = useState([]);
+  const [existingAttachments, setExistingAttachments] = useState([]);
+  // Generated once per form session rather than fresh inside handleSubmit
+  // — a submissionId that changes on every call defeats its own purpose
+  // (deduping a retried/double-fired submit) since two rapid submits of
+  // the "same" report would carry two different ids.
+  const [submissionId, setSubmissionId] = useState(() => crypto.randomUUID());
   const [editingReportId, setEditingReportId] = useState(null);
+  const [hasDraft, setHasDraft] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -70,6 +78,51 @@ export default function FinanceReport() {
     if (!projectId) return;
     api.get(`/reports/finance?projectId=${projectId}`).then(setReports).catch(() => setReports([]));
   }, [projectId, success]);
+
+  useEffect(() => {
+    if (!projectId || editingReportId) return;
+    api
+      .get(`/drafts/FINANCE?projectId=${projectId}`)
+      .then((draft) => {
+        if (draft) {
+          setReportDate(draft.reportDate.slice(0, 10));
+          setComments(draft.data.comments ?? "");
+          setLines(draft.data.lines ?? []);
+          setHasDraft(true);
+        } else {
+          setHasDraft(false);
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  async function handleSaveDraft() {
+    if (!projectId) return;
+    setError("");
+    setSuccess("");
+    setSavingDraft(true);
+    try {
+      await api.put("/drafts/FINANCE", { projectId, reportDate, data: { comments, lines } });
+      setHasDraft(true);
+      setSuccess("Draft saved.");
+    } catch (err) {
+      setError(err.message || "Failed to save draft");
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  async function handleDiscardDraft() {
+    try {
+      await api.delete(`/drafts/FINANCE?projectId=${projectId}`);
+    } catch {
+      // best-effort
+    }
+    setComments("");
+    setLines([]);
+    setHasDraft(false);
+  }
 
   useEffect(() => {
     const editId = searchParams.get("edit");
@@ -97,35 +150,34 @@ export default function FinanceReport() {
     setEditingReportId(report.id);
     setError("");
     setSuccess("");
+    setExistingAttachments([]);
+    // The photos/documents originally submitted with this report are
+    // still there (correcting the text doesn't touch attachments) — just
+    // never shown here before, which made it look like they'd vanished.
+    api.get(`/reports/${report.id}/attachments`).then(setExistingAttachments).catch(() => {});
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function cancelEditing() {
     setEditingReportId(null);
     setComments("");
-    setLines([{ ...EMPTY_LINE }]);
+    setLines([]);
     setReportDate(new Date().toISOString().slice(0, 10));
+    setExistingAttachments([]);
   }
 
-  function updateLine(index, field, value) {
-    setLines((ls) =>
-      ls.map((l, i) => {
-        if (i !== index) return l;
-        const updated = { ...l, [field]: value };
-        if (field === "type") {
-          updated.category = CATEGORIES_BY_TYPE[value][0].value;
-        }
-        return updated;
-      })
-    );
+  function updateLine(target, field, value) {
+    setLines((ls) => ls.map((l) => (l === target ? { ...l, [field]: value } : l)));
   }
 
-  function addLine() {
-    setLines((ls) => [...ls, { ...EMPTY_LINE }]);
+  // Type is fixed at creation, by which section's "+ Add" button was
+  // clicked — never changed afterward.
+  function addLine(type) {
+    setLines((ls) => [...ls, { ...EMPTY_LINE, type, category: CATEGORIES_BY_TYPE[type][0].value }]);
   }
 
-  function removeLine(index) {
-    setLines((ls) => (ls.length > 1 ? ls.filter((_, i) => i !== index) : ls));
+  function removeLine(target) {
+    setLines((ls) => ls.filter((l) => l !== target));
   }
 
   function handlePhotoSelect(e) {
@@ -147,15 +199,7 @@ export default function FinanceReport() {
   async function uploadPhoto(reportId, file) {
     const formData = new FormData();
     formData.append("photo", file);
-    const res = await fetch(`/api/reports/${reportId}/attachments`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${getAccessToken()}` },
-      body: formData,
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "Document upload failed");
-    }
+    await api.upload(`/reports/${reportId}/attachments`, formData);
   }
 
   async function handleSubmit(e) {
@@ -164,25 +208,47 @@ export default function FinanceReport() {
     setSuccess("");
     setSubmitting(true);
     try {
-      const lineData = lines.map((l) => ({
-        type: l.type,
-        category: l.category,
-        amount: Number(l.amount) || 0,
-        description: l.description || undefined,
-        paymentReference: l.paymentReference || undefined,
-      }));
+      // Sections left untouched contribute nothing — only rows with a
+      // real amount entered count as real transaction lines.
+      const lineData = lines
+        .filter((l) => l.amount !== "" && Number(l.amount) > 0)
+        .map((l) => ({
+          type: l.type,
+          category: l.category,
+          amount: Number(l.amount) || 0,
+          description: l.description || undefined,
+          paymentReference: l.paymentReference || undefined,
+        }));
+
+      if (lineData.length === 0) {
+        setError("Add at least one amount under Funds Received, Expenditure, or Outstanding Commitment.");
+        setSubmitting(false);
+        return;
+      }
 
       let report;
       if (editingReportId) {
         report = await api.patch(`/reports/finance/${editingReportId}`, { reportDate, comments, lines: lineData });
       } else {
-        report = await api.post("/reports/finance", {
-          projectId,
-          reportDate,
-          comments,
-          submissionId: crypto.randomUUID(),
-          lines: lineData,
-        });
+        const payload = { projectId, reportDate, comments, submissionId, lines: lineData };
+        try {
+          report = await api.post("/reports/finance", payload);
+        } catch (err) {
+          if (!isNetworkFailure(err)) throw err;
+          await queueReport({
+            label: `Finance report — ${reportDate}`,
+            endpoint: "/reports/finance",
+            payload,
+            photos: stagedPhotos.map((p) => p.file),
+          });
+          stagedPhotos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+          setStagedPhotos([]);
+          setSuccess("You're offline — report saved and will submit automatically once you're back online.");
+          setComments("");
+          setLines([]);
+          setSubmissionId(crypto.randomUUID());
+          return;
+        }
       }
 
       let photoFailures = 0;
@@ -202,8 +268,14 @@ export default function FinanceReport() {
           : `Finance report ${editingReportId ? "resubmitted" : "submitted"}.`
       );
       setComments("");
-      setLines([{ ...EMPTY_LINE }]);
+      setLines([]);
       setEditingReportId(null);
+      setExistingAttachments([]);
+      setSubmissionId(crypto.randomUUID());
+      if (hasDraft) {
+        api.delete(`/drafts/FINANCE?projectId=${projectId}`).catch(() => {});
+        setHasDraft(false);
+      }
     } catch (err) {
       setError(err.message || "Failed to submit report");
     } finally {
@@ -242,6 +314,14 @@ export default function FinanceReport() {
               <span>Correcting a returned report</span>
               <button type="button" onClick={cancelEditing} className="text-blue-600 underline">
                 Cancel
+              </button>
+            </div>
+          )}
+          {hasDraft && !editingReportId && (
+            <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-sm text-amber-800">
+              <span>Continuing from a saved draft</span>
+              <button type="button" onClick={handleDiscardDraft} className="text-amber-700 underline">
+                Discard draft
               </button>
             </div>
           )}
@@ -284,97 +364,42 @@ export default function FinanceReport() {
             </div>
           </div>
 
-          {lines.map((line, i) => (
-            <div key={i} className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="font-medium text-slate-900">Transaction {i + 1}</h3>
-                {lines.length > 1 && (
-                  <button type="button" onClick={() => removeLine(i)} className="text-sm text-red-600">
-                    Remove
-                  </button>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Type *</label>
-                <select
-                  value={line.type}
-                  onChange={(e) => updateLine(i, "type", e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                >
-                  {TYPES.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Category *</label>
-                <select
-                  value={line.category}
-                  onChange={(e) => updateLine(i, "category", e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                >
-                  {CATEGORIES_BY_TYPE[line.type].map((c) => (
-                    <option key={c.value} value={c.value}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Amount *</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  required
-                  value={line.amount}
-                  onChange={(e) => updateLine(i, "amount", e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Payment reference</label>
-                <input
-                  type="text"
-                  value={line.paymentReference}
-                  onChange={(e) => updateLine(i, "paymentReference", e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Description</label>
-                <input
-                  type="text"
-                  value={line.description}
-                  onChange={(e) => updateLine(i, "description", e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                />
-              </div>
-            </div>
+          {TYPES.map((t) => (
+            <TransactionSection
+              key={t.value}
+              title={t.label}
+              type={t.value}
+              categories={CATEGORIES_BY_TYPE[t.value]}
+              lines={lines}
+              updateLine={updateLine}
+              addLine={addLine}
+              removeLine={removeLine}
+            />
           ))}
-
-          <button
-            type="button"
-            onClick={addLine}
-            className="w-full bg-white border border-dashed border-slate-300 text-slate-600 rounded-md py-3 text-base font-medium"
-          >
-            + Add another transaction
-          </button>
 
           <div className="bg-white rounded-xl border border-slate-200 p-4">
             <label className="block text-sm font-medium text-slate-700 mb-2">Supporting documents (invoices, receipts)</label>
+            {existingAttachments.length > 0 && (
+              <div className="mb-2">
+                <p className="text-xs text-slate-500 mb-1">Already attached to this report:</p>
+                <div className="flex flex-wrap gap-2">
+                  {existingAttachments.map((a) => (
+                    <AttachmentThumb key={a.id} attachment={a} />
+                  ))}
+                </div>
+              </div>
+            )}
             {stagedPhotos.length > 0 && (
               <div className="grid grid-cols-3 gap-2 mb-2">
                 {stagedPhotos.map((p, i) => (
                   <div key={i} className="relative aspect-square bg-slate-100 rounded-md overflow-hidden">
-                    <img src={p.previewUrl} alt="" className="w-full h-full object-cover" />
+                    {p.file.type.startsWith("image/") ? (
+                      <img src={p.previewUrl} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center p-2 text-center text-xs text-slate-600 break-all">
+                        {p.file.name}
+                      </div>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeStagedPhoto(i)}
@@ -387,11 +412,10 @@ export default function FinanceReport() {
               </div>
             )}
             <label className="block w-full text-center border border-dashed border-slate-300 rounded-md py-3 text-sm text-slate-600">
-              + Add document photo
+              + Add document or photo
               <input
                 type="file"
-                accept="image/*"
-                capture="environment"
+                accept="image/*,application/pdf,.doc,.docx"
                 multiple
                 onChange={handlePhotoSelect}
                 className="hidden"
@@ -399,13 +423,25 @@ export default function FinanceReport() {
             </label>
           </div>
 
-          <button
-            type="submit"
-            disabled={submitting || !projectId}
-            className="w-full bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
-          >
-            {submitting ? "Submitting..." : editingReportId ? "Resubmit finance report" : "Submit finance report"}
-          </button>
+          <div className="flex gap-2">
+            {!editingReportId && (
+              <button
+                type="button"
+                onClick={handleSaveDraft}
+                disabled={savingDraft || !projectId}
+                className="flex-1 bg-white border border-slate-300 text-slate-700 rounded-md py-3 text-base font-medium disabled:opacity-60"
+              >
+                {savingDraft ? "Saving..." : "Save as draft"}
+              </button>
+            )}
+            <button
+              type="submit"
+              disabled={submitting || !projectId}
+              className="flex-1 bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
+            >
+              {submitting ? "Submitting..." : editingReportId ? "Resubmit finance report" : "Submit finance report"}
+            </button>
+          </div>
         </form>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -423,11 +459,102 @@ export default function FinanceReport() {
                     {l.type.replace("_", " ")} · {l.category.replace("_", " ")}: {l.amount}
                   </div>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => navigate(`/actions?sourceReportId=${r.id}&projectId=${projectId}&reportType=FINANCE`)}
+                  className="text-xs text-blue-600 underline mt-1"
+                >
+                  Raise action from this report
+                </button>
               </li>
             ))}
           </ul>
         </div>
       </main>
+    </div>
+  );
+}
+
+// One section per transaction type — the Finance user fills in whichever
+// ones actually happened today, instead of picking a type per line. This
+// is what stops "Funds Received" silently staying at zero just because
+// nobody thought to add a separate line for it.
+function TransactionSection({ title, type, categories, lines, updateLine, addLine, removeLine }) {
+  const sectionLines = lines.filter((l) => l.type === type);
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+      <h3 className="font-medium text-slate-900">{title}</h3>
+      {sectionLines.length === 0 && (
+        <p className="text-sm text-slate-400">Nothing to record — leave this blank if none today.</p>
+      )}
+
+      {sectionLines.map((line, i) => (
+        <div key={i} className="border border-slate-200 rounded-md p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-500">Item {i + 1}</span>
+            <button type="button" onClick={() => removeLine(line)} className="text-xs text-red-600">
+              Remove
+            </button>
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">Category *</label>
+            <select
+              value={line.category}
+              onChange={(e) => updateLine(line, "category", e.target.value)}
+              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+            >
+              {categories.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">Amount *</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              required
+              value={line.amount}
+              onChange={(e) => updateLine(line, "amount", e.target.value)}
+              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">Payment reference</label>
+            <input
+              type="text"
+              value={line.paymentReference}
+              onChange={(e) => updateLine(line, "paymentReference", e.target.value)}
+              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">Description</label>
+            <input
+              type="text"
+              value={line.description}
+              onChange={(e) => updateLine(line, "description", e.target.value)}
+              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+            />
+          </div>
+        </div>
+      ))}
+
+      <button
+        type="button"
+        onClick={() => addLine(type)}
+        className="w-full bg-white border border-dashed border-slate-300 text-slate-600 rounded-md py-2.5 text-sm font-medium"
+      >
+        + Add {title.toLowerCase()}
+      </button>
     </div>
   );
 }

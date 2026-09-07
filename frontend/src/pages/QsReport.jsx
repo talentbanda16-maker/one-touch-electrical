@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { api, getAccessToken } from "../api";
+import { api } from "../api";
+import { queueReport, isNetworkFailure } from "../lib/offlineQueue";
+import AttachmentThumb from "../components/AttachmentThumb";
+
+const VARIATION_STATUSES = ["PENDING", "APPROVED", "REJECTED"];
 
 const EMPTY_LINE = {
   boqItemNumber: "",
@@ -12,6 +16,7 @@ const EMPTY_LINE = {
   measurements: "",
   valuationAmount: "",
   variationReference: "",
+  variationStatus: "",
   comments: "",
 };
 
@@ -23,13 +28,22 @@ export default function QsReport() {
   const [projectId, setProjectId] = useState("");
   const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
   const [comments, setComments] = useState("");
+  const [commercialIssues, setCommercialIssues] = useState("");
   const [lines, setLines] = useState([{ ...EMPTY_LINE }]);
   const [reports, setReports] = useState([]);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [stagedPhotos, setStagedPhotos] = useState([]); // [{ file, previewUrl }]
+  const [existingAttachments, setExistingAttachments] = useState([]);
   const [editingReportId, setEditingReportId] = useState(null);
+  // Generated once per form session rather than fresh inside handleSubmit
+  // — a submissionId that changes on every call defeats its own purpose
+  // (deduping a retried/double-fired submit) since two rapid submits of
+  // the "same" report would carry two different ids.
+  const [submissionId, setSubmissionId] = useState(() => crypto.randomUUID());
+  const [hasDraft, setHasDraft] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -42,6 +56,53 @@ export default function QsReport() {
     if (!projectId) return;
     api.get(`/reports/qs?projectId=${projectId}`).then(setReports).catch(() => setReports([]));
   }, [projectId, success]);
+
+  useEffect(() => {
+    if (!projectId || editingReportId) return;
+    api
+      .get(`/drafts/QS?projectId=${projectId}`)
+      .then((draft) => {
+        if (draft) {
+          setReportDate(draft.reportDate.slice(0, 10));
+          setComments(draft.data.comments ?? "");
+          setCommercialIssues(draft.data.commercialIssues ?? "");
+          setLines(draft.data.lines?.length ? draft.data.lines : [{ ...EMPTY_LINE }]);
+          setHasDraft(true);
+        } else {
+          setHasDraft(false);
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  async function handleSaveDraft() {
+    if (!projectId) return;
+    setError("");
+    setSuccess("");
+    setSavingDraft(true);
+    try {
+      await api.put("/drafts/QS", { projectId, reportDate, data: { comments, commercialIssues, lines } });
+      setHasDraft(true);
+      setSuccess("Draft saved.");
+    } catch (err) {
+      setError(err.message || "Failed to save draft");
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  async function handleDiscardDraft() {
+    try {
+      await api.delete(`/drafts/QS?projectId=${projectId}`);
+    } catch {
+      // best-effort
+    }
+    setComments("");
+    setCommercialIssues("");
+    setLines([{ ...EMPTY_LINE }]);
+    setHasDraft(false);
+  }
 
   useEffect(() => {
     const editId = searchParams.get("edit");
@@ -57,6 +118,7 @@ export default function QsReport() {
     setProjectId(report.projectId);
     setReportDate(report.reportDate.slice(0, 10));
     setComments(report.qsDetail.comments || "");
+    setCommercialIssues(report.qsDetail.commercialIssues || "");
     setLines(
       report.qsDetail.lines.map((l) => ({
         boqItemNumber: l.boqItemNumber,
@@ -67,24 +129,43 @@ export default function QsReport() {
         measurements: l.measurements || "",
         valuationAmount: l.valuationAmount != null ? String(l.valuationAmount) : "",
         variationReference: l.variationReference || "",
+        variationStatus: l.variationStatus || "",
         comments: l.comments || "",
       }))
     );
     setEditingReportId(report.id);
     setError("");
     setSuccess("");
+    setExistingAttachments([]);
+    // The photos/documents originally submitted with this report are
+    // still there (correcting the text doesn't touch attachments) — just
+    // never shown here before, which made it look like they'd vanished.
+    api.get(`/reports/${report.id}/attachments`).then(setExistingAttachments).catch(() => {});
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function cancelEditing() {
     setEditingReportId(null);
     setComments("");
+    setCommercialIssues("");
     setLines([{ ...EMPTY_LINE }]);
     setReportDate(new Date().toISOString().slice(0, 10));
+    setExistingAttachments([]);
   }
 
   function updateLine(index, field, value) {
-    setLines((ls) => ls.map((l, i) => (i === index ? { ...l, [field]: value } : l)));
+    setLines((ls) =>
+      ls.map((l, i) => {
+        if (i !== index) return l;
+        // Clearing the reference hides the variation-status dropdown
+        // below, which silently left its already-picked value attached
+        // and submitted — clear it together so there's no hidden state.
+        if (field === "variationReference" && !value) {
+          return { ...l, variationReference: value, variationStatus: "" };
+        }
+        return { ...l, [field]: value };
+      })
+    );
   }
 
   function addLine() {
@@ -114,15 +195,7 @@ export default function QsReport() {
   async function uploadPhoto(reportId, file) {
     const formData = new FormData();
     formData.append("photo", file);
-    const res = await fetch(`/api/reports/${reportId}/attachments`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${getAccessToken()}` },
-      body: formData,
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "Photo upload failed");
-    }
+    await api.upload(`/reports/${reportId}/attachments`, formData);
   }
 
   async function handleSubmit(e) {
@@ -140,20 +213,46 @@ export default function QsReport() {
         measurements: l.measurements || undefined,
         valuationAmount: l.valuationAmount ? Number(l.valuationAmount) : undefined,
         variationReference: l.variationReference || undefined,
+        variationStatus: l.variationStatus || undefined,
         comments: l.comments || undefined,
       }));
 
       let report;
       if (editingReportId) {
-        report = await api.patch(`/reports/qs/${editingReportId}`, { reportDate, comments, lines: lineData });
+        report = await api.patch(`/reports/qs/${editingReportId}`, {
+          reportDate,
+          comments,
+          commercialIssues,
+          lines: lineData,
+        });
       } else {
-        report = await api.post("/reports/qs", {
+        const payload = {
           projectId,
           reportDate,
           comments,
-          submissionId: crypto.randomUUID(),
+          commercialIssues,
+          submissionId,
           lines: lineData,
-        });
+        };
+        try {
+          report = await api.post("/reports/qs", payload);
+        } catch (err) {
+          if (!isNetworkFailure(err)) throw err;
+          await queueReport({
+            label: `QS report — ${reportDate}`,
+            endpoint: "/reports/qs",
+            payload,
+            photos: stagedPhotos.map((p) => p.file),
+          });
+          stagedPhotos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+          setStagedPhotos([]);
+          setSuccess("You're offline — report saved and will submit automatically once you're back online.");
+          setComments("");
+          setCommercialIssues("");
+          setLines([{ ...EMPTY_LINE }]);
+          setSubmissionId(crypto.randomUUID());
+          return;
+        }
       }
 
       let photoFailures = 0;
@@ -173,8 +272,15 @@ export default function QsReport() {
           : `QS report ${editingReportId ? "resubmitted" : "submitted"}.`
       );
       setComments("");
+      setCommercialIssues("");
       setLines([{ ...EMPTY_LINE }]);
       setEditingReportId(null);
+      setExistingAttachments([]);
+      setSubmissionId(crypto.randomUUID());
+      if (hasDraft) {
+        api.delete(`/drafts/QS?projectId=${projectId}`).catch(() => {});
+        setHasDraft(false);
+      }
     } catch (err) {
       setError(err.message || "Failed to submit report");
     } finally {
@@ -216,6 +322,14 @@ export default function QsReport() {
               </button>
             </div>
           )}
+          {hasDraft && !editingReportId && (
+            <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-sm text-amber-800">
+              <span>Continuing from a saved draft</span>
+              <button type="button" onClick={handleDiscardDraft} className="text-amber-700 underline">
+                Discard draft
+              </button>
+            </div>
+          )}
           <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Project</label>
@@ -250,6 +364,17 @@ export default function QsReport() {
                 rows={2}
                 value={comments}
                 onChange={(e) => setComments(e.target.value)}
+                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Commercial issues</label>
+              <textarea
+                rows={2}
+                placeholder="Disputes, pricing queries, cost-impacting instructions..."
+                value={commercialIssues}
+                onChange={(e) => setCommercialIssues(e.target.value)}
                 className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
               />
             </div>
@@ -366,6 +491,24 @@ export default function QsReport() {
                 </div>
               </div>
 
+              {line.variationReference && (
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Variation status</label>
+                  <select
+                    value={line.variationStatus}
+                    onChange={(e) => updateLine(i, "variationStatus", e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+                  >
+                    <option value="">— Not set —</option>
+                    {VARIATION_STATUSES.map((s) => (
+                      <option key={s} value={s}>
+                        {s.charAt(0) + s.slice(1).toLowerCase()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs text-slate-500 mb-1">Line comments</label>
                 <input
@@ -387,12 +530,28 @@ export default function QsReport() {
           </button>
 
           <div className="bg-white rounded-xl border border-slate-200 p-4">
-            <label className="block text-sm font-medium text-slate-700 mb-2">Supporting photographs</label>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Supporting documents &amp; photographs</label>
+            {existingAttachments.length > 0 && (
+              <div className="mb-2">
+                <p className="text-xs text-slate-500 mb-1">Already attached to this report:</p>
+                <div className="flex flex-wrap gap-2">
+                  {existingAttachments.map((a) => (
+                    <AttachmentThumb key={a.id} attachment={a} />
+                  ))}
+                </div>
+              </div>
+            )}
             {stagedPhotos.length > 0 && (
               <div className="grid grid-cols-3 gap-2 mb-2">
                 {stagedPhotos.map((p, i) => (
                   <div key={i} className="relative aspect-square bg-slate-100 rounded-md overflow-hidden">
-                    <img src={p.previewUrl} alt="" className="w-full h-full object-cover" />
+                    {p.file.type.startsWith("image/") ? (
+                      <img src={p.previewUrl} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center p-2 text-center text-xs text-slate-600 break-all">
+                        {p.file.name}
+                      </div>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeStagedPhoto(i)}
@@ -405,11 +564,10 @@ export default function QsReport() {
               </div>
             )}
             <label className="block w-full text-center border border-dashed border-slate-300 rounded-md py-3 text-sm text-slate-600">
-              + Add photo
+              + Add document or photo
               <input
                 type="file"
-                accept="image/*"
-                capture="environment"
+                accept="image/*,application/pdf,.doc,.docx"
                 multiple
                 onChange={handlePhotoSelect}
                 className="hidden"
@@ -417,13 +575,25 @@ export default function QsReport() {
             </label>
           </div>
 
-          <button
-            type="submit"
-            disabled={submitting || !projectId}
-            className="w-full bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
-          >
-            {submitting ? "Submitting..." : editingReportId ? "Resubmit QS report" : "Submit QS report"}
-          </button>
+          <div className="flex gap-2">
+            {!editingReportId && (
+              <button
+                type="button"
+                onClick={handleSaveDraft}
+                disabled={savingDraft || !projectId}
+                className="flex-1 bg-white border border-slate-300 text-slate-700 rounded-md py-3 text-base font-medium disabled:opacity-60"
+              >
+                {savingDraft ? "Saving..." : "Save as draft"}
+              </button>
+            )}
+            <button
+              type="submit"
+              disabled={submitting || !projectId}
+              className="flex-1 bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
+            >
+              {submitting ? "Submitting..." : editingReportId ? "Resubmit QS report" : "Submit QS report"}
+            </button>
+          </div>
         </form>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -441,6 +611,13 @@ export default function QsReport() {
                     {l.boqItemNumber} — {l.description}: {l.percentCompletion}% (balance {l.balanceQuantity})
                   </div>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => navigate(`/actions?sourceReportId=${r.id}&projectId=${projectId}&reportType=QS`)}
+                  className="text-xs text-blue-600 underline mt-1"
+                >
+                  Raise action from this report
+                </button>
               </li>
             ))}
           </ul>

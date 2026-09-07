@@ -4,6 +4,7 @@ const prisma = require("../prisma");
 const { recordAudit } = require("../audit");
 const { requireAuth } = require("../middleware/auth");
 const { requireRole } = require("../middleware/rbac");
+const { notify, notifyManagers } = require("../lib/notifications");
 
 const router = express.Router();
 
@@ -137,6 +138,16 @@ router.post("/reports/:id/return", requireAuth, requireRole(), async (req, res) 
     entityType: "Report",
     entityId: report.id,
     metadata: { type: report.type, projectId: report.projectId, reason: parsed.data.reason },
+  });
+
+  await notify({
+    userId: report.submittedById,
+    type: "REPORT_RETURNED",
+    title: "Report returned for correction",
+    message: `Your ${report.type} report was returned: ${parsed.data.reason}`,
+    projectId: report.projectId,
+    link: "/dashboard",
+    dedupeKey: `REPORT_RETURNED:${report.id}:${updated.updatedAt.toISOString()}`,
   });
 
   res.json(updated);

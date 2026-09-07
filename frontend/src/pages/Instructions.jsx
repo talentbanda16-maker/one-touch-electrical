@@ -10,6 +10,7 @@ export default function Instructions() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const isManager = user?.role === "TECHNICAL_MANAGER";
+  const isManagement = user?.role === "MANAGEMENT";
 
   const [instructions, setInstructions] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -17,6 +18,7 @@ export default function Instructions() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [attachmentsByInstruction, setAttachmentsByInstruction] = useState({});
 
   const [form, setForm] = useState({
     projectId: "",
@@ -35,7 +37,50 @@ export default function Instructions() {
   }, []);
 
   function loadInstructions() {
-    api.get("/instructions").then(setInstructions).catch(() => setInstructions([]));
+    api
+      .get("/instructions")
+      .then((list) => {
+        setInstructions(list);
+        list.forEach((i) => loadAttachments(i.id));
+      })
+      .catch(() => setInstructions([]));
+  }
+
+  function loadAttachments(instructionId) {
+    api
+      .get(`/instructions/${instructionId}/attachments`)
+      .then((list) => setAttachmentsByInstruction((prev) => ({ ...prev, [instructionId]: list })))
+      .catch(() => {});
+  }
+
+  async function handleEvidenceUpload(instructionId, file) {
+    setError("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      await api.upload(`/instructions/${instructionId}/attachments`, formData);
+      loadAttachments(instructionId);
+    } catch (err) {
+      setError(err.message || "Failed to upload evidence");
+    }
+  }
+
+  async function handleEvidenceDownload(attachment) {
+    let blob;
+    try {
+      blob = await api.blob(`/attachments/${attachment.id}/file`);
+    } catch {
+      setError("Failed to download file");
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = attachment.fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   function updateField(field, value) {
@@ -198,7 +243,11 @@ export default function Instructions() {
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
           <h2 className="font-medium text-slate-900 mb-3">
-            {isManager ? "All instructions" : "Instructions assigned to me"}
+            {isManager
+              ? "All instructions"
+              : isManagement
+              ? "Instructions issued by the Technical Manager"
+              : "Instructions assigned to me"}
           </h2>
           {instructions.length === 0 && <p className="text-sm text-slate-500">Nothing here.</p>}
           <ul className="space-y-2">
@@ -215,7 +264,7 @@ export default function Instructions() {
                 </div>
                 <div className="pt-1">
                   {i.status !== "CLOSED" &&
-                  (i.personResponsibleId === user?.id || isManager) &&
+                  i.personResponsibleId === user?.id &&
                   i.status !== "COMPLETED" ? (
                     <label className="flex items-center gap-2 text-xs text-slate-500">
                       Status:
@@ -239,6 +288,34 @@ export default function Instructions() {
                     >
                       Verify &amp; close
                     </button>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 space-y-1">
+                  {(attachmentsByInstruction[i.id] ?? []).map((att) => (
+                    <button
+                      key={att.id}
+                      type="button"
+                      onClick={() => handleEvidenceDownload(att)}
+                      className="block text-xs text-blue-600 underline"
+                    >
+                      {att.fileName}
+                    </button>
+                  ))}
+                  {(i.personResponsibleId === user?.id || isManager) && (
+                    <label className="inline-block text-xs text-slate-500 border border-dashed border-slate-300 rounded px-2 py-1 cursor-pointer">
+                      + Add evidence
+                      <input
+                        type="file"
+                        accept="image/*,application/pdf,.doc,.docx"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = "";
+                          if (file) handleEvidenceUpload(i.id, file);
+                        }}
+                      />
+                    </label>
                   )}
                 </div>
               </li>

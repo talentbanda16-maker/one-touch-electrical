@@ -2,19 +2,25 @@ import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+import { queueReport, isNetworkFailure } from "../lib/offlineQueue";
+import AttachmentThumb from "../components/AttachmentThumb";
 
 const EMPTY_FORM = {
   reportDate: new Date().toISOString().slice(0, 10),
+  workersOnSite: 0,
   toolboxTalksConducted: "",
   safetyInspections: "",
   ppeCompliance: "",
+  hazardsIdentified: "",
   correctiveActions: "",
+  environmentalIssues: "",
+  safetyObservations: "",
   incidentCount: 0,
   nearMissCount: 0,
   incidentsDescription: "",
 };
 
-const NUMBER_FIELDS = ["incidentCount", "nearMissCount"];
+const NUMBER_FIELDS = ["workersOnSite", "incidentCount", "nearMissCount"];
 
 export default function SheReport() {
   const { user } = useAuth();
@@ -24,10 +30,20 @@ export default function SheReport() {
   const [projectId, setProjectId] = useState("");
   const [form, setForm] = useState(EMPTY_FORM);
   const [reports, setReports] = useState([]);
+  const [myActions, setMyActions] = useState([]);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [stagedPhotos, setStagedPhotos] = useState([]); // [{ file, previewUrl }]
+  const [existingAttachments, setExistingAttachments] = useState([]);
   const [editingReportId, setEditingReportId] = useState(null);
+  // Generated once per form session rather than fresh inside handleSubmit
+  // — a submissionId that changes on every call defeats its own purpose
+  // (deduping a retried/double-fired submit) since two rapid submits of
+  // the "same" report would carry two different ids.
+  const [submissionId, setSubmissionId] = useState(() => crypto.randomUUID());
+  const [hasDraft, setHasDraft] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -39,7 +55,53 @@ export default function SheReport() {
   useEffect(() => {
     if (!projectId) return;
     api.get(`/reports/she?projectId=${projectId}`).then(setReports).catch(() => setReports([]));
+    api
+      .get(`/actions?projectId=${projectId}&sourceType=SHE`)
+      .then(setMyActions)
+      .catch(() => setMyActions([]));
   }, [projectId, success]);
+
+  useEffect(() => {
+    if (!projectId || editingReportId) return;
+    api
+      .get(`/drafts/SHE?projectId=${projectId}`)
+      .then((draft) => {
+        if (draft) {
+          setForm({ ...EMPTY_FORM, ...draft.data, reportDate: draft.reportDate.slice(0, 10) });
+          setHasDraft(true);
+        } else {
+          setHasDraft(false);
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  async function handleSaveDraft() {
+    if (!projectId) return;
+    setError("");
+    setSuccess("");
+    setSavingDraft(true);
+    try {
+      await api.put("/drafts/SHE", { projectId, reportDate: form.reportDate, data: form });
+      setHasDraft(true);
+      setSuccess("Draft saved.");
+    } catch (err) {
+      setError(err.message || "Failed to save draft");
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  async function handleDiscardDraft() {
+    try {
+      await api.delete(`/drafts/SHE?projectId=${projectId}`);
+    } catch {
+      // best-effort
+    }
+    setForm(EMPTY_FORM);
+    setHasDraft(false);
+  }
 
   useEffect(() => {
     const editId = searchParams.get("edit");
@@ -56,10 +118,14 @@ export default function SheReport() {
     setProjectId(report.projectId);
     setForm({
       reportDate: report.reportDate.slice(0, 10),
+      workersOnSite: d.workersOnSite ?? 0,
       toolboxTalksConducted: d.toolboxTalksConducted || "",
       safetyInspections: d.safetyInspections || "",
       ppeCompliance: d.ppeCompliance || "",
+      hazardsIdentified: d.hazardsIdentified || "",
       correctiveActions: d.correctiveActions || "",
+      environmentalIssues: d.environmentalIssues || "",
+      safetyObservations: d.safetyObservations || "",
       incidentCount: d.incidentCount,
       nearMissCount: d.nearMissCount,
       incidentsDescription: d.incidentsDescription || "",
@@ -67,16 +133,44 @@ export default function SheReport() {
     setEditingReportId(report.id);
     setError("");
     setSuccess("");
+    setExistingAttachments([]);
+    // The photos/documents originally submitted with this report are
+    // still there (correcting the text doesn't touch attachments) — just
+    // never shown here before, which made it look like they'd vanished.
+    api.get(`/reports/${report.id}/attachments`).then(setExistingAttachments).catch(() => {});
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function cancelEditing() {
     setEditingReportId(null);
     setForm(EMPTY_FORM);
+    setExistingAttachments([]);
   }
 
   function updateField(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
+  }
+
+  function handlePhotoSelect(e) {
+    const files = Array.from(e.target.files || []);
+    setStagedPhotos((current) => [
+      ...current,
+      ...files.map((file) => ({ file, previewUrl: URL.createObjectURL(file) })),
+    ]);
+    e.target.value = "";
+  }
+
+  function removeStagedPhoto(index) {
+    setStagedPhotos((current) => {
+      URL.revokeObjectURL(current[index].previewUrl);
+      return current.filter((_, i) => i !== index);
+    });
+  }
+
+  async function uploadPhoto(reportId, file) {
+    const formData = new FormData();
+    formData.append("photo", file);
+    await api.upload(`/reports/${reportId}/attachments`, formData);
   }
 
   async function handleSubmit(e) {
@@ -90,21 +184,63 @@ export default function SheReport() {
         numericForm[field] = Number(numericForm[field]) || 0;
       }
 
+      let report;
       if (editingReportId) {
-        await api.patch(`/reports/she/${editingReportId}`, numericForm);
+        report = await api.patch(`/reports/she/${editingReportId}`, numericForm);
       } else {
-        await api.post("/reports/she", { ...numericForm, projectId, submissionId: crypto.randomUUID() });
+        const payload = { ...numericForm, projectId, submissionId };
+        try {
+          report = await api.post("/reports/she", payload);
+        } catch (err) {
+          if (!isNetworkFailure(err)) throw err;
+          await queueReport({
+            label: `SHE report — ${numericForm.reportDate}`,
+            endpoint: "/reports/she",
+            payload,
+            photos: stagedPhotos.map((p) => p.file),
+          });
+          stagedPhotos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+          setStagedPhotos([]);
+          setSuccess("You're offline — report saved and will submit automatically once you're back online.");
+          setForm(EMPTY_FORM);
+          setSubmissionId(crypto.randomUUID());
+          return;
+        }
       }
 
-      setSuccess(`SHE report ${editingReportId ? "resubmitted" : "submitted"}.`);
+      let photoFailures = 0;
+      for (const { file } of stagedPhotos) {
+        try {
+          await uploadPhoto(report.id, file);
+        } catch {
+          photoFailures++;
+        }
+      }
+
+      stagedPhotos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+      setStagedPhotos([]);
+      setSuccess(
+        photoFailures > 0
+          ? `SHE report ${editingReportId ? "resubmitted" : "submitted"}, but ${photoFailures} photo(s) failed to upload.`
+          : `SHE report ${editingReportId ? "resubmitted" : "submitted"}.`
+      );
       setForm(EMPTY_FORM);
       setEditingReportId(null);
+      setExistingAttachments([]);
+      setSubmissionId(crypto.randomUUID());
+      if (hasDraft) {
+        api.delete(`/drafts/SHE?projectId=${projectId}`).catch(() => {});
+        setHasDraft(false);
+      }
     } catch (err) {
       setError(err.message || "Failed to submit report");
     } finally {
       setSubmitting(false);
     }
   }
+
+  const openActions = myActions.filter((a) => a.status === "OPEN" || a.status === "IN_PROGRESS");
+  const closedActions = myActions.filter((a) => a.status === "COMPLETED" || a.status === "CLOSED");
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -140,6 +276,14 @@ export default function SheReport() {
               </button>
             </div>
           )}
+          {hasDraft && !editingReportId && (
+            <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-sm text-amber-800">
+              <span>Continuing from a saved draft</span>
+              <button type="button" onClick={handleDiscardDraft} className="text-amber-700 underline">
+                Discard draft
+              </button>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Project</label>
             <select
@@ -156,15 +300,28 @@ export default function SheReport() {
             </select>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Report date</label>
-            <input
-              type="date"
-              required
-              value={form.reportDate}
-              onChange={(e) => updateField("reportDate", e.target.value)}
-              className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Report date</label>
+              <input
+                type="date"
+                required
+                value={form.reportDate}
+                onChange={(e) => updateField("reportDate", e.target.value)}
+                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Workers on site</label>
+              <input
+                type="number"
+                min="0"
+                inputMode="numeric"
+                value={form.workersOnSite}
+                onChange={(e) => updateField("workersOnSite", e.target.value)}
+                className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+              />
+            </div>
           </div>
 
           <TextArea
@@ -175,7 +332,10 @@ export default function SheReport() {
           />
           <TextArea label="Safety inspections" value={form.safetyInspections} onChange={(v) => updateField("safetyInspections", v)} />
           <TextArea label="PPE compliance" value={form.ppeCompliance} onChange={(v) => updateField("ppeCompliance", v)} />
+          <TextArea label="Hazards identified" value={form.hazardsIdentified} onChange={(v) => updateField("hazardsIdentified", v)} />
           <TextArea label="Corrective actions" value={form.correctiveActions} onChange={(v) => updateField("correctiveActions", v)} />
+          <TextArea label="Environmental issues" value={form.environmentalIssues} onChange={(v) => updateField("environmentalIssues", v)} />
+          <TextArea label="Safety observations" value={form.safetyObservations} onChange={(v) => updateField("safetyObservations", v)} />
 
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Incidents &amp; near misses</label>
@@ -206,14 +366,79 @@ export default function SheReport() {
             <TextArea label="Description (if any)" value={form.incidentsDescription} onChange={(v) => updateField("incidentsDescription", v)} />
           </div>
 
-          <button
-            type="submit"
-            disabled={submitting || !projectId}
-            className="w-full bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
-          >
-            {submitting ? "Submitting..." : editingReportId ? "Resubmit SHE report" : "Submit SHE report"}
-          </button>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Photographic evidence &amp; safety records</label>
+            {existingAttachments.length > 0 && (
+              <div className="mb-2">
+                <p className="text-xs text-slate-500 mb-1">Already attached to this report:</p>
+                <div className="flex flex-wrap gap-2">
+                  {existingAttachments.map((a) => (
+                    <AttachmentThumb key={a.id} attachment={a} />
+                  ))}
+                </div>
+              </div>
+            )}
+            {stagedPhotos.length > 0 && (
+              <div className="grid grid-cols-3 gap-2 mb-2">
+                {stagedPhotos.map((p, i) => (
+                  <div key={i} className="relative aspect-square bg-slate-100 rounded-md overflow-hidden">
+                    {p.file.type.startsWith("image/") ? (
+                      <img src={p.previewUrl} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center p-2 text-center text-xs text-slate-600 break-all">
+                        {p.file.name}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeStagedPhoto(i)}
+                      className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-6 h-6 text-xs"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <label className="block w-full text-center border border-dashed border-slate-300 rounded-md py-3 text-sm text-slate-600">
+              + Add document or photo
+              <input
+                type="file"
+                accept="image/*,application/pdf,.doc,.docx"
+                multiple
+                onChange={handlePhotoSelect}
+                className="hidden"
+              />
+            </label>
+          </div>
+
+          <div className="flex gap-2">
+            {!editingReportId && (
+              <button
+                type="button"
+                onClick={handleSaveDraft}
+                disabled={savingDraft || !projectId}
+                className="flex-1 bg-white border border-slate-300 text-slate-700 rounded-md py-3 text-base font-medium disabled:opacity-60"
+              >
+                {savingDraft ? "Saving..." : "Save as draft"}
+              </button>
+            )}
+            <button
+              type="submit"
+              disabled={submitting || !projectId}
+              className="flex-1 bg-blue-600 text-white rounded-md py-3 text-base font-medium disabled:opacity-60"
+            >
+              {submitting ? "Submitting..." : editingReportId ? "Resubmit SHE report" : "Submit SHE report"}
+            </button>
+          </div>
         </form>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <h2 className="font-medium text-slate-900 mb-1">Your SHE actions on this project</h2>
+          <p className="text-sm text-slate-600">
+            {openActions.length} outstanding · {closedActions.length} closed
+          </p>
+        </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
           <h2 className="font-medium text-slate-900 mb-3">Recent SHE reports for this project</h2>
@@ -221,10 +446,19 @@ export default function SheReport() {
           <ul className="space-y-2">
             {reports.map((r) => (
               <li key={r.id} className="text-sm border border-slate-100 rounded-md p-2">
-                <span className="font-medium">{new Date(r.reportDate).toLocaleDateString()}</span>
-                {" · "}
-                {r.sheDetail?.incidentCount ?? 0} incidents, {r.sheDetail?.nearMissCount ?? 0} near misses · {r.status}
-                {r.submittedBy?.name ? ` · ${r.submittedBy.name}` : ""}
+                <div>
+                  <span className="font-medium">{new Date(r.reportDate).toLocaleDateString()}</span>
+                  {" · "}
+                  {r.sheDetail?.incidentCount ?? 0} incidents, {r.sheDetail?.nearMissCount ?? 0} near misses · {r.status}
+                  {r.submittedBy?.name ? ` · ${r.submittedBy.name}` : ""}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/actions?sourceReportId=${r.id}&projectId=${projectId}&reportType=SHE`)}
+                  className="text-xs text-blue-600 underline mt-1"
+                >
+                  Raise action from this report
+                </button>
               </li>
             ))}
           </ul>

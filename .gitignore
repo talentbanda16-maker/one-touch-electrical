@@ -6,3 +6,7 @@ build/
 *.log
 .DS_Store
 backend/uploads/
+backups/
+backups-secondary/
+test-results/
+playwright-report/
