@@ -2,6 +2,7 @@ const express = require("express");
 const prisma = require("../prisma");
 const { requireAuth } = require("../middleware/auth");
 const { requireRole } = require("../middleware/rbac");
+const { recordAudit } = require("../audit");
 
 const router = express.Router();
 const fmtN = (v) => (v != null ? Number(v) : 0);
@@ -27,6 +28,8 @@ function enrichItem(item) {
     unitPrice, budgetUnitPrice, reorderLevel,
     isLow, totalCost, budgetCost, variance,
     order: item.order,
+    createdBy: item.createdBy ? { id: item.createdBy.id, name: item.createdBy.name, role: item.createdBy.role } : null,
+    createdAt: item.createdAt,
     usageLogs: (item.usageLogs ?? []).map((l) => ({
       id: l.id, qty: fmtN(l.qty), date: l.date, notes: l.notes,
       recordedBy: l.recordedBy?.name ?? "—",
@@ -42,6 +45,7 @@ router.get("/", requireAuth, requireRole("QS", "FINANCE", "TECHNICAL_MANAGER", "
     where: { projectId },
     orderBy: { order: "asc" },
     include: {
+      createdBy: { select: { id: true, name: true, role: true } },
       usageLogs: { include: { recordedBy: { select: { name: true } } }, orderBy: { date: "desc" } },
       stockTransactions: { select: { direction: true, quantity: true } },
     },
@@ -68,13 +72,20 @@ router.post("/sync-from-boq", requireAuth, requireRole("QS"), async (req, res) =
       updated++;
     } else {
       const count = await prisma.bomItem.count({ where: { projectId } });
-      await prisma.bomItem.create({
+      const newItem = await prisma.bomItem.create({
         data: {
           projectId, name: boq.description.trim(), unit: boq.unit || "",
           qtyNeeded: boq.contractQuantity || 0, qtyOrdered: 0,
           unitPrice: 0, budgetUnitPrice: boq.contractRate || 0,
-          reorderLevel: 0, order: count,
+          reorderLevel: 0, order: count, createdById: req.user.id,
         },
+      });
+      await recordAudit({
+        userId: req.user.id,
+        action: "BOM_ITEM_ADDED",
+        entityType: "BomItem",
+        entityId: newItem.id,
+        metadata: { name: newItem.name, unit: newItem.unit, projectId, source: "boq_sync" },
       });
       created++;
     }
@@ -93,8 +104,20 @@ router.post("/", requireAuth, requireRole("QS"), async (req, res) => {
       qtyNeeded: qtyNeeded ?? 0, qtyOrdered: qtyOrdered ?? 0,
       unitPrice: unitPrice ?? 0, budgetUnitPrice: budgetUnitPrice ?? 0,
       reorderLevel: reorderLevel ?? 0, order: count,
+      createdById: req.user.id,
     },
-    include: { usageLogs: true, stockTransactions: { select: { direction: true, quantity: true } } },
+    include: {
+      createdBy: { select: { id: true, name: true, role: true } },
+      usageLogs: true,
+      stockTransactions: { select: { direction: true, quantity: true } },
+    },
+  });
+  await recordAudit({
+    userId: req.user.id,
+    action: "BOM_ITEM_ADDED",
+    entityType: "BomItem",
+    entityId: item.id,
+    metadata: { name: item.name, unit: item.unit, projectId },
   });
   res.json(enrichItem(item));
 });

@@ -240,6 +240,7 @@ export default function QsProcurement() {
                       <div className="col-span-2 min-w-0">
                         <p className="text-sm font-semibold text-slate-800 truncate">{item.name}</p>
                         <p className="text-xs text-blue-500">{fmtN(item.qtyDelivered)} {item.unit} received × {fmt$(item.unitPrice)}</p>
+                        {item.createdBy && <p className="text-xs text-slate-400">Added by {item.createdBy.name}</p>}
                       </div>
                       <p className="text-right text-sm font-semibold text-slate-900">{fmt$(actualCost)}</p>
                       <p className="text-right text-sm text-slate-600">{fmt$(item.budgetCost)}</p>

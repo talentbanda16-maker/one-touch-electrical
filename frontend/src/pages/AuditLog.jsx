@@ -24,6 +24,7 @@ const ACTION_LABELS = {
   INSTRUCTION_CREATED: "Instruction created",
   INSTRUCTION_ARCHIVED: "Instruction archived",
   PROJECT_ARCHIVED: "Project archived",
+  BOM_ITEM_ADDED: "BOM item added",
 };
 
 const ACTION_COLORS = {
