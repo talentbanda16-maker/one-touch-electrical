@@ -104,6 +104,20 @@ export default function ProjectSettings() {
     };
   }
 
+  async function handleArchive() {
+    const selected = projects.find((p) => p.id === projectId);
+    if (!selected) return;
+    if (!window.confirm(`Archive "${selected.name}"? It will be hidden from active lists but never deleted.`)) return;
+    setError("");
+    try {
+      await api.patch(`/projects/${projectId}/archive`, {});
+      setSuccess(`"${selected.name}" has been archived.`);
+      loadProjects();
+    } catch (err) {
+      setError(err.message || "Failed to archive project");
+    }
+  }
+
   async function handleSave(e) {
     e.preventDefault();
     setError("");
@@ -130,14 +144,14 @@ export default function ProjectSettings() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+      <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">Project Settings</p>
           <p className="font-medium text-slate-900">{user?.name}</p>
         </div>
         <button
           onClick={() => navigate("/dashboard")}
-          className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+          className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-sm hover:bg-white/10 transition-colors"
         >
           Back
         </button>
@@ -314,6 +328,16 @@ export default function ProjectSettings() {
           >
             {saving ? "Saving..." : creating ? "Create project" : "Save changes"}
           </button>
+
+          {!creating && projectId && (
+            <button
+              type="button"
+              onClick={handleArchive}
+              className="w-full border border-slate-200 text-slate-500 hover:text-red-600 hover:border-red-200 hover:bg-red-50 rounded-md py-2.5 text-sm transition-colors"
+            >
+              Archive this project
+            </button>
+          )}
         </form>
       </main>
     </div>

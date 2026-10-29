@@ -81,12 +81,12 @@ export default function ProductivityFinalize() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+      <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">Productivity Reports</p>
           <p className="font-medium text-slate-900">{user?.name}</p>
         </div>
-        <button onClick={() => navigate("/dashboard")} className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2">Back</button>
+        <button onClick={() => navigate("/dashboard")} className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-sm hover:bg-white/10 transition-colors">Back</button>
       </header>
 
       <main className="p-4 max-w-2xl mx-auto space-y-4">

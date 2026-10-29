@@ -66,6 +66,7 @@ export default function FinanceReport() {
   const [editingReportId, setEditingReportId] = useState(null);
   const [hasDraft, setHasDraft] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [profitData, setProfitData] = useState(null);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -77,6 +78,14 @@ export default function FinanceReport() {
   useEffect(() => {
     if (!projectId) return;
     api.get(`/reports/finance?projectId=${projectId}`).then(setReports).catch(() => setReports([]));
+    Promise.all([
+      api.get(`/dashboard/income-items?projectId=${projectId}`).catch(() => []),
+      api.get(`/dashboard/expense-items?projectId=${projectId}`).catch(() => []),
+    ]).then(([income, expense]) => {
+      const incomeTotal  = income.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
+      const expenseTotal = expense.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
+      setProfitData({ incomeTotal, expenseTotal, incomeItems: income, expenseItems: expense });
+    });
   }, [projectId, success]);
 
   useEffect(() => {
@@ -285,14 +294,14 @@ export default function FinanceReport() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+      <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">Finance Report</p>
           <p className="font-medium text-slate-900">{user?.name}</p>
         </div>
         <button
           onClick={() => navigate("/dashboard")}
-          className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+          className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-sm hover:bg-white/10 transition-colors"
         >
           Back
         </button>
@@ -341,6 +350,69 @@ export default function FinanceReport() {
                 ))}
               </select>
             </div>
+
+            {/* Read-only Profit / Loss card */}
+            {profitData && (profitData.incomeTotal > 0 || profitData.expenseTotal > 0) && (() => {
+              const { incomeTotal, expenseTotal, incomeItems, expenseItems } = profitData;
+              const profit      = incomeTotal - expenseTotal;
+              const isProfit    = profit >= 0;
+              const marginPct   = incomeTotal > 0 ? Math.round((profit / incomeTotal) * 100) : null;
+              const fmt$        = (v) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v);
+              const fmt$dec     = (v) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(v || 0);
+              return (
+                <div className={`rounded-xl border-2 p-4 space-y-3 ${isProfit ? "bg-green-50 border-green-300" : "bg-red-50 border-red-300"}`}>
+                  {/* Summary row */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className={`text-xs font-bold uppercase tracking-wide mb-0.5 ${isProfit ? "text-green-700" : "text-red-700"}`}>
+                        {isProfit ? "Profit" : "Loss"}
+                      </p>
+                      <p className={`text-2xl font-black ${isProfit ? "text-green-800" : "text-red-800"}`}>
+                        {isProfit ? "+" : "-"}{fmt$(Math.abs(profit))}
+                      </p>
+                      <p className={`text-xs mt-0.5 ${isProfit ? "text-green-600" : "text-red-600"}`}>
+                        Income Received − Project Expenses
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-3xl font-black ${isProfit ? "text-green-700" : "text-red-700"}`}>
+                        {marginPct != null ? `${marginPct}%` : "—"}
+                      </p>
+                      <p className={`text-xs font-semibold ${isProfit ? "text-green-600" : "text-red-600"}`}>Margin</p>
+                    </div>
+                  </div>
+                  {/* Totals */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-white bg-opacity-60 rounded-lg p-2 text-center">
+                      <p className="text-green-700 mb-0.5">Income Received</p>
+                      <p className="font-bold text-slate-800">{fmt$(incomeTotal)}</p>
+                    </div>
+                    <div className="bg-white bg-opacity-60 rounded-lg p-2 text-center">
+                      <p className="text-slate-500 mb-0.5">Project Expenses</p>
+                      <p className="font-bold text-slate-800">{fmt$(expenseTotal)}</p>
+                    </div>
+                  </div>
+                  {/* Line-item breakdown */}
+                  {(incomeItems.length > 0 || expenseItems.length > 0) && (
+                    <div className="grid grid-cols-2 gap-3 pt-1">
+                      {[{ label: "Income Received", items: incomeItems, color: "text-green-700" },
+                        { label: "Project Expenses", items: expenseItems, color: "text-red-700" }]
+                        .map(({ label, items, color }) => items.length > 0 && (
+                          <div key={label} className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+                            <p className={`text-xs font-bold px-3 py-2 border-b border-slate-100 ${color}`}>{label}</p>
+                            {items.map((item) => (
+                              <div key={item.id} className="flex justify-between px-3 py-1.5 border-b border-slate-50 text-xs">
+                                <span className="text-slate-700 truncate pr-2">{item.description}</span>
+                                <span className="font-semibold text-slate-900 tabular-nums whitespace-nowrap">{fmt$dec(parseFloat(item.amount))}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Report date</label>

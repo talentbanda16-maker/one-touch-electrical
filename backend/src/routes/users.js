@@ -8,12 +8,12 @@ const { requireRole } = require("../middleware/rbac");
 
 const router = express.Router();
 
-const ROLES = ["TECHNICAL_MANAGER", "FOREMAN", "QS", "SHE_OFFICER", "STORESMAN", "FINANCE", "MANAGEMENT", "GENERAL_WORKER"];
+const ROLES = ["TECHNICAL_MANAGER", "ENGINEER", "FOREMAN", "QS", "SHE_OFFICER", "STORESMAN", "FINANCE", "MANAGEMENT", "GENERAL_WORKER"];
 // Mirrors projects.js's ASSIGNABLE_ROLES — the same set of roles that
 // get auto-enrolled on every project at project-creation time also get
 // auto-enrolled on every existing project when the person is created,
 // so it doesn't matter which happens first.
-const ASSIGNABLE_ROLES = ["FOREMAN", "QS", "SHE_OFFICER", "STORESMAN", "FINANCE", "GENERAL_WORKER"];
+const ASSIGNABLE_ROLES = ["ENGINEER", "FOREMAN", "QS", "SHE_OFFICER", "STORESMAN", "FINANCE", "GENERAL_WORKER"];
 
 const createUserSchema = z.object({
   email: z.string().email(),

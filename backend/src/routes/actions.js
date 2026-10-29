@@ -4,6 +4,7 @@ const prisma = require("../prisma");
 const { recordAudit } = require("../audit");
 const { requireAuth } = require("../middleware/auth");
 const { requireRole, requireProjectMember } = require("../middleware/rbac");
+const { generateRefNumber } = require("../lib/refNumbers");
 
 const router = express.Router();
 
@@ -46,6 +47,8 @@ router.post("/", requireAuth, requireProjectMember, async (req, res) => {
     return res.status(400).json({ error: "Actions you raise can only be assigned to the Technical Manager" });
   }
 
+  const refNumber = await generateRefNumber("action");
+
   const action = await prisma.action.create({
     data: {
       projectId,
@@ -55,6 +58,7 @@ router.post("/", requireAuth, requireProjectMember, async (req, res) => {
       priority,
       sourceReportId,
       createdById: req.user.id,
+      refNumber,
     },
     include: {
       assignedTo: { select: { id: true, name: true } },
@@ -98,6 +102,9 @@ router.get("/", requireAuth, async (req, res) => {
     // but the TM going forward.
     where.OR = [{ assignedToId: req.user.id }, { createdById: req.user.id }];
   }
+
+  const showArchived = req.query.archived === "true";
+  where.isArchived = showArchived;
 
   const actions = await prisma.action.findMany({
     where,
@@ -178,6 +185,30 @@ router.post("/:id/verify", requireAuth, requireRole(), async (req, res) => {
   await recordAudit({
     userId: req.user.id,
     action: "ACTION_VERIFIED_CLOSED",
+    entityType: "Action",
+    entityId: action.id,
+  });
+
+  res.json(updated);
+});
+
+// Archive an action (soft-delete) — Technical Manager only.
+router.patch("/:id/archive", requireAuth, async (req, res) => {
+  if (req.user.role !== "TECHNICAL_MANAGER") {
+    return res.status(403).json({ error: "Only the Technical Manager can archive an action" });
+  }
+
+  const action = await prisma.action.findUnique({ where: { id: req.params.id } });
+  if (!action) return res.status(404).json({ error: "Action not found" });
+
+  const updated = await prisma.action.update({
+    where: { id: action.id },
+    data: { isArchived: true },
+  });
+
+  await recordAudit({
+    userId: req.user.id,
+    action: "ACTION_ARCHIVED",
     entityType: "Action",
     entityId: action.id,
   });

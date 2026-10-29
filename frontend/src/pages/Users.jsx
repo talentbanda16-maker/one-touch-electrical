@@ -3,9 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 
-const ROLES = ["TECHNICAL_MANAGER", "FOREMAN", "QS", "SHE_OFFICER", "STORESMAN", "FINANCE", "MANAGEMENT", "GENERAL_WORKER"];
+const ROLES = ["TECHNICAL_MANAGER", "ENGINEER", "FOREMAN", "QS", "SHE_OFFICER", "STORESMAN", "FINANCE", "MANAGEMENT", "GENERAL_WORKER"];
 const ROLE_LABELS = {
   TECHNICAL_MANAGER: "Technical Manager",
+  ENGINEER: "Engineer",
   FOREMAN: "Foreman",
   QS: "Quantity Surveyor",
   SHE_OFFICER: "SHE Officer",
@@ -74,14 +75,14 @@ export default function Users() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+      <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">Users</p>
           <p className="font-medium text-slate-900">{user?.name}</p>
         </div>
         <button
           onClick={() => navigate("/dashboard")}
-          className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+          className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-sm hover:bg-white/10 transition-colors"
         >
           Back
         </button>

@@ -1,6 +1,8 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { api, setAccessToken } from "../api";
 
+const API_BASE = "https://sun-hunter-focuses-cape.trycloudflare.com";
+
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
@@ -12,7 +14,7 @@ export function AuthProvider({ children }) {
     // persisted to storage), so try the refresh cookie to resume a session.
     (async () => {
       try {
-        const res = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, { method: "POST", credentials: "include" });
         if (res.ok) {
           const data = await res.json();
           setAccessToken(data.accessToken);

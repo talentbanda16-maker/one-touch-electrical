@@ -13,6 +13,7 @@ const EMPTY_LINE = {
   supplier: "",
   deliveryReference: "",
   notes: "",
+  bomItemId: "",
 };
 
 const DIRECTIONS = [
@@ -53,6 +54,7 @@ export default function StoresReport() {
   const [requisitionError, setRequisitionError] = useState("");
   const [hasDraft, setHasDraft] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [bomItems, setBomItems] = useState([]);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -64,11 +66,13 @@ export default function StoresReport() {
   useEffect(() => {
     if (!projectId) return;
     api.get(`/reports/stores?projectId=${projectId}`).then(setReports).catch(() => setReports([]));
+    api.get(`/procurement?projectId=${projectId}`).then(setBomItems).catch(() => setBomItems([]));
     loadRequisitions(projectId);
   }, [projectId, success]);
 
   useEffect(() => {
     if (!projectId || editingReportId) return;
+    const presetDir = searchParams.get("direction");
     api
       .get(`/drafts/STORES?projectId=${projectId}`)
       .then((draft) => {
@@ -80,6 +84,7 @@ export default function StoresReport() {
           setHasDraft(true);
         } else {
           setHasDraft(false);
+          if (presetDir) setLines([{ ...EMPTY_LINE, direction: presetDir }]);
         }
       })
       .catch(() => {});
@@ -256,6 +261,7 @@ export default function StoresReport() {
           supplier: l.supplier || undefined,
           deliveryReference: l.deliveryReference || undefined,
           notes: l.notes || undefined,
+          bomItemId: l.bomItemId || undefined,
         }));
 
       if (lineData.length === 0) {
@@ -337,14 +343,14 @@ export default function StoresReport() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+      <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">Stores Report</p>
           <p className="font-medium text-slate-900">{user?.name}</p>
         </div>
         <button
           onClick={() => navigate("/dashboard")}
-          className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+          className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-sm hover:bg-white/10 transition-colors"
         >
           Back
         </button>
@@ -435,6 +441,7 @@ export default function StoresReport() {
               updateLine={updateLine}
               addLine={addLine}
               removeLine={removeLine}
+              bomItems={bomItems}
             />
           ))}
 
@@ -522,8 +529,12 @@ export default function StoresReport() {
                     className={`text-xs rounded px-2 py-0.5 ${
                       r.status === "PENDING"
                         ? "bg-amber-100 text-amber-800"
+                        : r.status === "APPROVED"
+                        ? "bg-blue-100 text-blue-800"
                         : r.status === "FULFILLED"
                         ? "bg-green-100 text-green-800"
+                        : r.status === "REJECTED"
+                        ? "bg-red-100 text-red-700"
                         : "bg-slate-100 text-slate-600"
                     }`}
                   >
@@ -532,8 +543,9 @@ export default function StoresReport() {
                 </div>
                 <div className="text-slate-500 text-xs">
                   {r.urgency} urgency · requested by {r.requestedBy?.name}
+                  {r.refNumber && <span className="ml-1 font-mono font-semibold text-blue-600"> · {r.refNumber}</span>}
                 </div>
-                {r.status === "PENDING" && (
+                {(r.status === "PENDING" || r.status === "APPROVED") && (
                   <div className="flex gap-3 mt-1">
                     <button
                       type="button"
@@ -549,6 +561,11 @@ export default function StoresReport() {
                     >
                       Cancel
                     </button>
+                  </div>
+                )}
+                {r.status === "REJECTED" && r.rejectionReason && (
+                  <div className="mt-1 text-xs text-red-600 bg-red-50 border border-red-100 rounded px-2 py-1">
+                    Rejected: {r.rejectionReason}
                   </div>
                 )}
               </li>
@@ -603,7 +620,7 @@ export default function StoresReport() {
               onChange={(e) => setNewRequisition((r) => ({ ...r, notes: e.target.value }))}
               className="w-full rounded-md border border-slate-300 px-2 py-2 text-sm"
             />
-            <button type="submit" className="w-full bg-slate-800 text-white rounded-md py-2 text-sm font-medium">
+            <button type="submit" className="w-full bg-brand-900 text-white rounded-md py-2 text-sm font-medium">
               Raise requisition
             </button>
           </form>
@@ -648,30 +665,137 @@ export default function StoresReport() {
   );
 }
 
-// One section per movement type — the Storesman just fills in whichever
-// ones actually happened today (leaves the rest empty), instead of
-// picking a movement type per line. "Received" carries a few extra
-// fields (cost/supplier/delivery ref) that don't apply to the others.
-function MovementSection({ title, direction, lines, updateLine, addLine, removeLine }) {
+function MovementSection({ title, direction, lines, updateLine, addLine, removeLine, bomItems }) {
   const sectionLines = lines.filter((l) => l.direction === direction);
-  const showReceivedFields = direction === "RECEIVED";
+  const hasBom = bomItems.length > 0;
+  const showBomLink = (direction === "RECEIVED" || direction === "ISSUED") && hasBom;
 
+  if (direction === "RECEIVED") {
+    return (
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200">
+          <h3 className="font-medium text-slate-900">Material Received</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-slate-50 text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                <th className="border border-slate-200 px-2 py-2 text-center w-8">#</th>
+                <th className="border border-slate-200 px-3 py-2 text-left">Description</th>
+                <th className="border border-slate-200 px-3 py-2 text-left w-24">Quantity</th>
+                <th className="border border-slate-200 px-3 py-2 text-left w-28">Finance $</th>
+                <th className="border border-slate-200 px-3 py-2 text-left w-36">Supplier</th>
+                {showBomLink && <th className="border border-slate-200 px-3 py-2 text-left w-36">BOM Link</th>}
+                <th className="border border-slate-200 px-2 py-2 w-8"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sectionLines.length === 0 && (
+                <tr>
+                  <td colSpan={showBomLink ? 7 : 6} className="border border-slate-200 px-4 py-4 text-center text-sm text-slate-400">
+                    No items yet — click "+ Add row" below.
+                  </td>
+                </tr>
+              )}
+              {sectionLines.map((line, i) => (
+                <tr key={i} className="hover:bg-slate-50">
+                  <td className="border border-slate-200 px-2 py-1 text-center text-xs text-slate-500 font-medium">
+                    {i + 1}
+                  </td>
+                  <td className="border border-slate-200 px-1 py-1">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Item description"
+                      value={line.itemName}
+                      onChange={(e) => updateLine(line, "itemName", e.target.value)}
+                      className="w-full px-2 py-1.5 text-sm border-0 focus:outline-none focus:ring-1 focus:ring-blue-400 rounded"
+                    />
+                  </td>
+                  <td className="border border-slate-200 px-1 py-1">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      required
+                      placeholder="0"
+                      value={line.quantity}
+                      onChange={(e) => updateLine(line, "quantity", e.target.value)}
+                      className="w-full px-2 py-1.5 text-sm border-0 focus:outline-none focus:ring-1 focus:ring-blue-400 rounded"
+                    />
+                  </td>
+                  <td className="border border-slate-200 px-1 py-1">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={line.unitCost}
+                      onChange={(e) => updateLine(line, "unitCost", e.target.value)}
+                      className="w-full px-2 py-1.5 text-sm border-0 focus:outline-none focus:ring-1 focus:ring-blue-400 rounded"
+                    />
+                  </td>
+                  <td className="border border-slate-200 px-1 py-1">
+                    <input
+                      type="text"
+                      placeholder="Supplier name"
+                      value={line.supplier}
+                      onChange={(e) => updateLine(line, "supplier", e.target.value)}
+                      className="w-full px-2 py-1.5 text-sm border-0 focus:outline-none focus:ring-1 focus:ring-blue-400 rounded"
+                    />
+                  </td>
+                  {showBomLink && (
+                    <td className="border border-slate-200 px-1 py-1">
+                      <select
+                        value={line.bomItemId || ""}
+                        onChange={(e) => updateLine(line, "bomItemId", e.target.value || "")}
+                        className="w-full px-2 py-1.5 text-xs border-0 focus:outline-none focus:ring-1 focus:ring-blue-400 rounded bg-transparent"
+                      >
+                        <option value="">— none —</option>
+                        {bomItems.map((b) => (
+                          <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                  )}
+                  <td className="border border-slate-200 px-1 py-1 text-center">
+                    <button
+                      type="button"
+                      onClick={() => removeLine(line)}
+                      className="text-slate-400 hover:text-red-500 text-lg leading-none"
+                    >×</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="px-4 py-2 border-t border-slate-100">
+          <button
+            type="button"
+            onClick={() => addLine(direction)}
+            className="text-sm text-blue-600 hover:text-blue-800 font-semibold"
+          >
+            + Add row
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Non-RECEIVED directions: card layout
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
       <h3 className="font-medium text-slate-900">{title}</h3>
       {sectionLines.length === 0 && (
         <p className="text-sm text-slate-400">Nothing to record — leave this blank if none today.</p>
       )}
-
       {sectionLines.map((line, i) => (
         <div key={i} className="border border-slate-200 rounded-md p-3 space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-500">Item {i + 1}</span>
-            <button type="button" onClick={() => removeLine(line)} className="text-xs text-red-600">
-              Remove
-            </button>
+            <button type="button" onClick={() => removeLine(line)} className="text-xs text-red-600">Remove</button>
           </div>
-
           <div>
             <label className="block text-xs text-slate-500 mb-1">Item name *</label>
             <input
@@ -682,7 +806,6 @@ function MovementSection({ title, direction, lines, updateLine, addLine, removeL
               className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
             />
           </div>
-
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-slate-500 mb-1">Quantity *</label>
@@ -707,43 +830,6 @@ function MovementSection({ title, direction, lines, updateLine, addLine, removeL
               />
             </div>
           </div>
-
-          {showReceivedFields && (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Unit cost</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={line.unitCost}
-                    onChange={(e) => updateLine(line, "unitCost", e.target.value)}
-                    className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Supplier</label>
-                  <input
-                    type="text"
-                    value={line.supplier}
-                    onChange={(e) => updateLine(line, "supplier", e.target.value)}
-                    className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Delivery reference</label>
-                <input
-                  type="text"
-                  value={line.deliveryReference}
-                  onChange={(e) => updateLine(line, "deliveryReference", e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                />
-              </div>
-            </>
-          )}
-
           <div>
             <label className="block text-xs text-slate-500 mb-1">Notes</label>
             <input
@@ -753,9 +839,23 @@ function MovementSection({ title, direction, lines, updateLine, addLine, removeL
               className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
             />
           </div>
+          {showBomLink && (
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Link to QS BOM item (optional)</label>
+              <select
+                value={line.bomItemId || ""}
+                onChange={(e) => updateLine(line, "bomItemId", e.target.value || "")}
+                className="w-full rounded-md border border-slate-300 px-3 py-3 text-sm"
+              >
+                <option value="">— not linked —</option>
+                {bomItems.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name} ({b.unit})</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       ))}
-
       <button
         type="button"
         onClick={() => addLine(direction)}

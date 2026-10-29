@@ -19,7 +19,7 @@ function requireRole(...allowedRoles) {
 // brief — same rule as the "see every project" branch in GET /projects).
 async function requireProjectAccess(req, res, next) {
   if (!req.user) return res.status(401).json({ error: "Not authenticated" });
-  if (req.user.role === "TECHNICAL_MANAGER" || req.user.role === "MANAGEMENT") return next();
+  if (req.user.role === "TECHNICAL_MANAGER" || req.user.role === "ENGINEER" || req.user.role === "MANAGEMENT") return next();
 
   const projectId = req.params.projectId || req.body.projectId || req.query.projectId;
   if (!projectId) return res.status(400).json({ error: "projectId is required" });
@@ -43,7 +43,7 @@ async function requireProjectAccess(req, res, next) {
 // must not imply "can act on every project."
 async function requireProjectMember(req, res, next) {
   if (!req.user) return res.status(401).json({ error: "Not authenticated" });
-  if (req.user.role === "TECHNICAL_MANAGER") return next();
+  if (req.user.role === "TECHNICAL_MANAGER" || req.user.role === "ENGINEER") return next();
 
   const projectId = req.params.projectId || req.body.projectId || req.query.projectId;
   if (!projectId) return res.status(400).json({ error: "projectId is required" });

@@ -75,16 +75,22 @@ export default function ManagementDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
-        <div>
-          <p className="text-sm text-slate-500">Management Dashboard</p>
-          <p className="font-medium text-slate-900">{user?.name}</p>
+      <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
+        <div className="flex items-center gap-3">
+          <img src="/logo.png" alt="One Touch" className="w-10 h-10 rounded-lg object-contain bg-white p-0.5 shadow" />
+          <div>
+            <p className="text-white font-bold text-sm leading-tight">One Touch Electrical</p>
+            <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full mt-0.5"
+              style={{ background: "rgba(255,255,255,0.12)", color: "#93c5fd" }}>
+              Management
+            </span>
+          </div>
         </div>
         <button
           onClick={() => navigate("/dashboard")}
-          className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+          className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-xs hover:bg-white/10 transition-colors"
         >
-          Back
+          ← Back
         </button>
       </header>
 

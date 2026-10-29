@@ -23,6 +23,7 @@ const notificationRoutes = require("./routes/notifications");
 const draftRoutes = require("./routes/drafts");
 const auditRoutes = require("./routes/audit");
 const productivityRoutes = require("./routes/productivity");
+const progressRoutes = require("./routes/progress");
 
 const app = express();
 
@@ -49,7 +50,8 @@ app.use(
     crossOriginResourcePolicy: false,
   })
 );
-app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
+const allowedOrigins = (process.env.FRONTEND_URL || "").split(",").map((o) => o.trim()).filter(Boolean);
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 
@@ -69,6 +71,8 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/drafts", draftRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/productivity-reports", productivityRoutes);
+app.use("/api/progress", progressRoutes);
+app.use("/api/procurement", require("./routes/procurement"));
 
 app.use((err, _req, res, _next) => {
   console.error(err);

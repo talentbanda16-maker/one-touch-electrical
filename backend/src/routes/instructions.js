@@ -61,7 +61,7 @@ router.post("/", requireAuth, requireRole(), async (req, res) => {
 // changes; everyone else sees only instructions assigned to them.
 router.get("/", requireAuth, async (req, res) => {
   const { projectId } = req.query;
-  const where = {};
+  const where = { isArchived: req.query.archived === "true" };
   if (projectId) where.projectId = projectId;
   if (req.user.role === "MANAGEMENT") {
     where.issuedBy = { role: "TECHNICAL_MANAGER" };
@@ -149,6 +149,26 @@ router.post("/:id/verify", requireAuth, requireRole(), async (req, res) => {
   await recordAudit({
     userId: req.user.id,
     action: "INSTRUCTION_VERIFIED_CLOSED",
+    entityType: "Instruction",
+    entityId: instruction.id,
+  });
+
+  res.json(updated);
+});
+
+// Archive an instruction (soft-delete) — Technical Manager only.
+router.patch("/:id/archive", requireAuth, requireRole(), async (req, res) => {
+  const instruction = await prisma.instruction.findUnique({ where: { id: req.params.id } });
+  if (!instruction) return res.status(404).json({ error: "Instruction not found" });
+
+  const updated = await prisma.instruction.update({
+    where: { id: instruction.id },
+    data: { isArchived: true },
+  });
+
+  await recordAudit({
+    userId: req.user.id,
+    action: "INSTRUCTION_ARCHIVED",
     entityType: "Instruction",
     entityId: instruction.id,
   });

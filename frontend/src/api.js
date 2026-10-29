@@ -17,14 +17,7 @@ function errorMessageFrom(data, fallback) {
   return fallback;
 }
 
-// Empty by default — every call below just hits a relative "/api/..."
-// path, which works because Vite's dev proxy (and, in a real deployment,
-// the same server serving both frontend and backend) forwards it to the
-// backend automatically. Set VITE_API_URL only when the frontend is
-// hosted somewhere separate from the backend (e.g. Vercel talking to a
-// backend on a different domain) — then every request is sent there
-// directly instead.
-const API_BASE = import.meta.env.VITE_API_URL || "";
+const API_BASE = import.meta.env.VITE_API_URL ?? "https://concepts-certified-expanded-cabin.trycloudflare.com";
 
 let accessToken = null;
 

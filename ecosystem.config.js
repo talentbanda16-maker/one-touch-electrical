@@ -38,5 +38,22 @@ module.exports = {
       error_file: "../logs/frontend-error.log",
       time: true,
     },
+    {
+      // Free Cloudflare "quick tunnel" exposing the backend publicly.
+      // Its URL changes every time this process restarts — when that
+      // happens, update VITE_API_URL in the Vercel project and redeploy
+      // (see pm2 logs one-touch-tunnel for the new URL).
+      name: "one-touch-tunnel",
+      script: "C:/Program Files (x86)/cloudflared/cloudflared.exe",
+      args: "tunnel --protocol http2 --url http://localhost:4000",
+      interpreter: "none",
+      autorestart: true,
+      max_restarts: 10,
+      min_uptime: "10s",
+      restart_delay: 2000,
+      out_file: "./logs/tunnel-out.log",
+      error_file: "./logs/tunnel-error.log",
+      time: true,
+    },
   ],
 };

@@ -11,6 +11,7 @@ datasource db {
 
 enum Role {
   TECHNICAL_MANAGER
+  ENGINEER
   FOREMAN
   QS
   SHE_OFFICER
@@ -34,6 +35,14 @@ enum ReportType {
   SHE
   STORES
   FINANCE
+}
+
+enum ShePeriodType {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  ANNUAL
 }
 
 // DRAFT/RETURNED are for the Step 3 approval workflow; Step 2 reports
@@ -63,6 +72,7 @@ model User {
   reports       Report[]
   reviewedReports Report[] @relation("ReportReviewer")
   reportRevisionsReturned ReportRevision[] @relation("ReportRevisionReturnedBy")
+  bomUsageLogs            BomUsageLog[]    @relation("BomUsageRecorder")
   attachments   Attachment[]
   instructionsResponsibleFor Instruction[] @relation("InstructionResponsible")
   instructionsIssued         Instruction[] @relation("InstructionIssuedBy")
@@ -71,8 +81,10 @@ model User {
   actionsCreated  Action[] @relation("ActionCreatedBy")
   actionsVerified Action[] @relation("ActionVerifiedBy")
   projectsManaged Project[] @relation("ProjectManager")
-  requisitionsRequested MaterialRequisition[] @relation("RequisitionRequestedBy")
-  requisitionsFulfilled MaterialRequisition[] @relation("RequisitionFulfilledBy")
+  requisitionsRequested  MaterialRequisition[] @relation("RequisitionRequestedBy")
+  requisitionsApproved   MaterialRequisition[] @relation("RequisitionApprovedBy")
+  requisitionsFulfilled  MaterialRequisition[] @relation("RequisitionFulfilledBy")
+  bomItemsCreated        BomItem[]             @relation("BomItemCreatedBy")
   programmeEntries      ProgrammeEntry[]
   notifications         Notification[]
   reportDrafts          ReportDraft[]
@@ -92,9 +104,14 @@ model Project {
   location          String?
   contractValue     Decimal?      @db.Decimal(14, 2)
   approvedBudget    Decimal?      @db.Decimal(14, 2)
+  claimedAmount     Decimal?      @db.Decimal(14, 2)
+  paidAmount        Decimal?      @db.Decimal(14, 2)
+  receivedToDate    Decimal?      @db.Decimal(14, 2)
+  projectExpenses   Decimal?      @db.Decimal(14, 2)
   startDate         DateTime?
   plannedEndDate    DateTime?
   status            ProjectStatus @default(PLANNING)
+  isArchived        Boolean       @default(false)
   // Attribution/accountability only — every Technical Manager already has
   // full access to every project via the role bypass, so this doesn't
   // gate anything, it just records who's actually responsible for it.
@@ -114,8 +131,49 @@ model Project {
   notifications Notification[]
   reportDrafts  ReportDraft[]
   productivityReports ProductivityReport[]
+  qsPayments  QsPayment[]
+  boqItems       ProjectBoqItem[]
+  progressCells  ProgressCell[]
+  progressLogs   ProgressLog[]
+  bomItems       BomItem[]
+  claimItems     ClaimItem[]
+  incomeItems    IncomeItem[]
+  expenseItems   ExpenseItem[]
 
   @@map("projects")
+}
+
+model ClaimItem {
+  id          String   @id @default(uuid())
+  projectId   String
+  description String
+  amount      Decimal  @db.Decimal(14, 2)
+  createdAt   DateTime @default(now())
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("claim_items")
+}
+
+model IncomeItem {
+  id          String   @id @default(uuid())
+  projectId   String
+  description String
+  amount      Decimal  @db.Decimal(14, 2)
+  createdAt   DateTime @default(now())
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("income_items")
+}
+
+model ExpenseItem {
+  id          String   @id @default(uuid())
+  projectId   String
+  description String
+  amount      Decimal  @db.Decimal(14, 2)
+  createdAt   DateTime @default(now())
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("expense_items")
 }
 
 // A saved-in-progress report — spec Section 20's "employee creates
@@ -268,6 +326,7 @@ model Report {
   attachments   Attachment[]
   revisions     ReportRevision[]
   actionsRaised Action[]
+  qsPayments    QsPayment[]
 
   @@map("reports")
 }
@@ -377,13 +436,18 @@ model QsReportLine {
   qsReportDetailId  String
   boqItemNumber     String
   description       String
+  unit              String?
   contractQuantity  Decimal  @db.Decimal(14, 2)
-  // cumulativeQuantity and contractQuantity are the source numbers;
-  // balanceQuantity and percentCompletion are derived server-side
-  // (never trust client math for progress/financial figures — spec 9.3).
-  quantityToday       Decimal @db.Decimal(14, 2)
-  cumulativeQuantity  Decimal @db.Decimal(14, 2)
-  balanceQuantity     Decimal @db.Decimal(14, 2)
+  // contractRate is the price per unit; all amount columns are derived
+  // server-side as rate × qty so the client can never submit a
+  // manipulated total (spec 9.3 — calculated from source records).
+  contractRate        Decimal? @db.Decimal(14, 2)
+  contractAmount      Decimal? @db.Decimal(14, 2)
+  quantityToday       Decimal  @db.Decimal(14, 2)
+  periodAmount        Decimal? @db.Decimal(14, 2)
+  cumulativeQuantity  Decimal  @db.Decimal(14, 2)
+  cumulativeAmount    Decimal? @db.Decimal(14, 2)
+  balanceQuantity     Decimal  @db.Decimal(14, 2)
   percentCompletion   Int
   measurements        String?
   valuationAmount     Decimal? @db.Decimal(14, 2)
@@ -396,15 +460,52 @@ model QsReportLine {
   @@map("qs_report_lines")
 }
 
+// Master BOQ template for a project — set up once by the QS.
+// New claims auto-load from this instead of starting blank.
+model ProjectBoqItem {
+  id               String   @id @default(uuid())
+  projectId        String
+  order            Int      @default(0)
+  boqItemNumber    String
+  description      String
+  unit             String   @default("")
+  contractQuantity Decimal  @db.Decimal(14, 4)
+  contractRate     Decimal  @db.Decimal(14, 4)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("project_boq_items")
+}
+
+model QsPayment {
+  id          String   @id @default(uuid())
+  projectId   String
+  reportId    String?
+  amountPaid  Decimal  @db.Decimal(14, 2)
+  datePaid    DateTime @db.Date
+  reference   String?
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  report  Report? @relation(fields: [reportId], references: [id], onDelete: SetNull)
+
+  @@map("qs_payments")
+}
+
 // ---------- SHE (per spec Section 8) ----------
 
 // Scoped to exactly the SHE Officer's main functions per spec Section 3's
 // role table (Toolbox talks, inspections, PPE, incidents, near misses,
 // corrective actions) — narrower than the full Section 8 field list.
 model SheReportDetail {
-  id                    String  @id @default(uuid())
-  reportId              String  @unique
-  workersOnSite         Int     @default(0)
+  id                    String         @id @default(uuid())
+  reportId              String         @unique
+  periodType            ShePeriodType  @default(DAILY)
+  periodEnd             DateTime?      @db.Date
+  workersOnSite         Int            @default(0)
   toolboxTalksConducted String?
   safetyInspections     String?
   ppeCompliance         String?
@@ -412,9 +513,11 @@ model SheReportDetail {
   correctiveActions     String?
   environmentalIssues   String?
   safetyObservations    String?
-  incidentCount         Int     @default(0)
-  nearMissCount         Int     @default(0)
+  incidentCount         Int            @default(0)
+  nearMissCount         Int            @default(0)
   incidentsDescription  String?
+  // Stores structured extra data for period reports (weekly/monthly/quarterly/annual)
+  periodReportData      Json?
 
   report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
 
@@ -462,8 +565,10 @@ model StockTransactionLine {
   // APPROVED line for the same item on the same project.
   openingBalance        Decimal        @default(0) @db.Decimal(14, 2)
   closingBalance        Decimal        @default(0) @db.Decimal(14, 2)
+  bomItemId             String?
 
   storesReportDetail StoresReportDetail @relation(fields: [storesReportDetailId], references: [id], onDelete: Cascade)
+  bomItem            BomItem?           @relation(fields: [bomItemId], references: [id], onDelete: SetNull)
 
   @@map("stock_transaction_lines")
 }
@@ -472,6 +577,8 @@ model StockTransactionLine {
 
 enum RequisitionStatus {
   PENDING
+  APPROVED
+  REJECTED
   FULFILLED
   CANCELLED
 }
@@ -482,6 +589,7 @@ enum RequisitionStatus {
 model MaterialRequisition {
   id                String            @id @default(uuid())
   projectId         String
+  refNumber         String?           // REQ/2026/0001 — auto-assigned on create
   itemName          String
   quantityRequested Decimal           @db.Decimal(14, 2)
   unit              String?
@@ -490,12 +598,17 @@ model MaterialRequisition {
   notes             String?
   requestedById     String
   requestedAt       DateTime          @default(now())
+  approvedById      String?
+  approvedAt        DateTime?
+  rejectionReason   String?
   fulfilledById     String?
   fulfilledAt       DateTime?
   fulfillmentNotes  String?
+  isArchived        Boolean           @default(false)
 
   project     Project @relation(fields: [projectId], references: [id])
   requestedBy User    @relation("RequisitionRequestedBy", fields: [requestedById], references: [id])
+  approvedBy  User?   @relation("RequisitionApprovedBy", fields: [approvedById], references: [id])
   fulfilledBy User?   @relation("RequisitionFulfilledBy", fields: [fulfilledById], references: [id])
 
   @@map("material_requisitions")
@@ -690,6 +803,7 @@ model Instruction {
   dueDate            DateTime       @db.Date
   verifiedById       String?
   verifiedAt         DateTime?
+  isArchived         Boolean        @default(false)
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
 
@@ -708,6 +822,7 @@ model Instruction {
 model Action {
   id             String         @id @default(uuid())
   projectId      String
+  refNumber      String?        // ACT/2026/0001 — auto-assigned on create
   sourceReportId String?
   description    String
   priority       Priority       @default(MEDIUM)
@@ -718,6 +833,7 @@ model Action {
   comments       String?
   verifiedById   String?
   verifiedAt     DateTime?
+  isArchived     Boolean        @default(false)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -776,4 +892,93 @@ model Notification {
 
   @@unique([userId, dedupeKey])
   @@map("notifications")
+}
+
+// ---------- Procurement / BOM (QS-managed) ----------
+
+model BomItem {
+  id              String   @id @default(uuid())
+  projectId       String
+  name            String
+  unit            String   @default("")
+  qtyNeeded       Decimal  @default(0) @db.Decimal(14, 4)
+  qtyOrdered      Decimal  @default(0) @db.Decimal(14, 4)
+  qtyDelivered    Decimal  @default(0) @db.Decimal(14, 4)
+  qtyUsed         Decimal  @default(0) @db.Decimal(14, 4)
+  unitPrice       Decimal  @default(0) @db.Decimal(14, 2)
+  budgetUnitPrice Decimal  @default(0) @db.Decimal(14, 2)
+  reorderLevel    Decimal  @default(0) @db.Decimal(14, 4)
+  order           Int      @default(0)
+  createdById     String?
+  isArchived      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project           Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy         User?                  @relation("BomItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  usageLogs         BomUsageLog[]
+  stockTransactions StockTransactionLine[]
+
+  @@map("bom_items")
+}
+
+model BomUsageLog {
+  id           String   @id @default(uuid())
+  bomItemId    String
+  qty          Decimal  @db.Decimal(14, 4)
+  date         DateTime @default(now()) @db.Date
+  notes        String?
+  recordedById String
+  createdAt    DateTime @default(now())
+
+  bomItem    BomItem @relation(fields: [bomItemId], references: [id], onDelete: Cascade)
+  recordedBy User    @relation("BomUsageRecorder", fields: [recordedById], references: [id])
+
+  @@map("bom_usage_logs")
+}
+
+// ---------- Site Progress Matrix (QS-managed per spec) ----------
+
+model ProgressRow {
+  id        String         @id @default(uuid())
+  label     String
+  order     Int            @default(0)
+  targetPct Int?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  cells     ProgressCell[]
+  logs      ProgressLog[]
+
+  @@map("progress_rows")
+}
+
+model ProgressCell {
+  id        String   @id @default(uuid())
+  rowId     String
+  projectId String
+  value     String   @default("")
+  updatedAt DateTime @updatedAt
+
+  row     ProgressRow @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([rowId, projectId])
+  @@map("progress_cells")
+}
+
+// Daily progress log — one entry per update so history is preserved
+model ProgressLog {
+  id         String   @id @default(uuid())
+  rowId      String
+  projectId  String
+  date       DateTime @db.Date
+  percentage Int?
+  targetPct  Int?
+  note       String?
+  createdAt  DateTime @default(now())
+
+  row     ProgressRow @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("progress_logs")
 }

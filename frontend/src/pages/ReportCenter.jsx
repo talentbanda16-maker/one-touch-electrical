@@ -106,14 +106,14 @@ export default function ReportCenter() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+      <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">Report Center</p>
           <p className="font-medium text-slate-900">{user?.name}</p>
         </div>
         <button
           onClick={() => navigate("/dashboard")}
-          className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+          className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-sm hover:bg-white/10 transition-colors"
         >
           Back
         </button>
@@ -248,7 +248,7 @@ export default function ReportCenter() {
               <button
                 onClick={() => handleExport("xlsx")}
                 disabled={!projectId || rangeInvalid || downloading !== null}
-                className="bg-green-700 text-white rounded-xl py-3 text-sm font-medium disabled:opacity-50"
+                className="bg-brand-600 text-white rounded-xl py-3 text-sm font-medium disabled:opacity-50"
               >
                 {downloading === "xlsx" ? "Generating..." : "Export Excel"}
               </button>

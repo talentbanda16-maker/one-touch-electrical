@@ -162,7 +162,7 @@ export default function ProjectAnalytics() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+      <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">Progress &amp; Finance</p>
           <p className="font-medium text-slate-900">{user?.name}</p>
@@ -170,13 +170,13 @@ export default function ProjectAnalytics() {
         <div className="flex gap-2">
           <button
             onClick={() => navigate("/analytics/compare")}
-            className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+            className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-sm hover:bg-white/10 transition-colors"
           >
             Compare projects
           </button>
           <button
             onClick={() => navigate("/dashboard")}
-            className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+            className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-sm hover:bg-white/10 transition-colors"
           >
             Back
           </button>
@@ -422,7 +422,7 @@ export default function ProjectAnalytics() {
                     onChange={(e) => setNewPlannedProgress(e.target.value)}
                     className="w-28 rounded-md border border-slate-300 px-2 py-2 text-sm"
                   />
-                  <button type="submit" className="bg-slate-800 text-white rounded-md px-3 py-2 text-sm shrink-0">
+                  <button type="submit" className="bg-brand-900 text-white rounded-md px-3 py-2 text-sm shrink-0">
                     Set
                   </button>
                 </form>

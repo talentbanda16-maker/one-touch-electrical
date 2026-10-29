@@ -16,6 +16,7 @@ export default function StoresAnalytics() {
   const [data, setData] = useState(null);
   const [requisitions, setRequisitions] = useState([]);
   const [error, setError] = useState("");
+  const isTM = user?.role === "TECHNICAL_MANAGER";
 
   useEffect(() => {
     api.get("/projects").then((list) => {
@@ -38,17 +39,27 @@ export default function StoresAnalytics() {
   }, [projectId]);
 
   const pendingRequisitions = requisitions.filter((r) => r.status === "PENDING");
+  const rejectedRequisitions = requisitions.filter((r) => r.status === "REJECTED");
+
+  async function handleApproveReq(id, approved, rejectionReason) {
+    try {
+      await api.patch(`/requisitions/${id}/approve`, { approved, rejectionReason });
+      api.get(`/projects/${projectId}/requisitions`).then(setRequisitions).catch(() => {});
+    } catch (err) {
+      setError(err.message || "Failed to update requisition");
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+      <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">Stores — Material Tracking</p>
           <p className="font-medium text-slate-900">{user?.name}</p>
         </div>
         <button
           onClick={() => navigate("/dashboard")}
-          className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+          className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-sm hover:bg-white/10 transition-colors"
         >
           Back
         </button>
@@ -74,6 +85,89 @@ export default function StoresAnalytics() {
           <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{error}</div>
         )}
 
+        {pendingRequisitions.length > 0 && (
+              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                  <h2 className="font-semibold text-slate-900 text-sm">Pending material requisitions</h2>
+                  <span className="ml-auto text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+                    {pendingRequisitions.length}
+                  </span>
+                </div>
+                <ul className="divide-y divide-slate-100">
+                  {pendingRequisitions.map((r) => (
+                    <li key={r.id} className="px-4 py-3 flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        {r.refNumber && (
+                          <span className="text-xs font-mono font-semibold text-blue-600 bg-blue-50 border border-blue-100 rounded px-1.5 py-0.5 mr-2">
+                            {r.refNumber}
+                          </span>
+                        )}
+                        <span className="text-sm font-medium text-slate-900">{r.itemName}</span>
+                        <span className="text-sm text-slate-500 ml-1">× {r.quantityRequested}{r.unit ? ` ${r.unit}` : ""}</span>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          {r.urgency} priority · by {r.requestedBy?.name}
+                          {r.notes ? ` · ${r.notes}` : ""}
+                        </div>
+                      </div>
+                      {isTM && (
+                        <div className="flex gap-2 shrink-0">
+                          <button
+                            onClick={() => handleApproveReq(r.id, true)}
+                            className="text-xs font-semibold text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1 hover:bg-green-100"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            onClick={() => {
+                              const reason = window.prompt("Reason for rejection (optional):");
+                              if (reason !== null) handleApproveReq(r.id, false, reason || undefined);
+                            }}
+                            className="text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1 hover:bg-red-100"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+        {rejectedRequisitions.length > 0 && (
+          <div className="bg-white border border-red-200 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-red-100 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />
+              <h2 className="font-semibold text-slate-900 text-sm">Rejected requisitions</h2>
+              <span className="ml-auto text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-full px-2 py-0.5">
+                {rejectedRequisitions.length}
+              </span>
+            </div>
+            <ul className="divide-y divide-slate-100">
+              {rejectedRequisitions.map((r) => (
+                <li key={r.id} className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    {r.refNumber && (
+                      <span className="text-xs font-mono font-semibold text-blue-600 bg-blue-50 border border-blue-100 rounded px-1.5 py-0.5">
+                        {r.refNumber}
+                      </span>
+                    )}
+                    <span className="text-sm font-medium text-slate-900">{r.itemName}</span>
+                    <span className="text-sm text-slate-500">× {r.quantityRequested}{r.unit ? ` ${r.unit}` : ""}</span>
+                  </div>
+                  <div className="text-xs text-slate-400 mt-0.5">by {r.requestedBy?.name}</div>
+                  {r.rejectionReason && (
+                    <div className="mt-1 text-xs text-red-600 bg-red-50 border border-red-100 rounded px-2 py-1">
+                      Reason: {r.rejectionReason}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {data && (
           <>
             {data.items.length === 0 && (
@@ -88,18 +182,6 @@ export default function StoresAnalytics() {
                 {data.shortages.map((s, i) => (
                   <p key={i} className="text-sm text-red-800">
                     {new Date(s.date).toLocaleDateString()} — {s.note}
-                  </p>
-                ))}
-              </div>
-            )}
-
-            {pendingRequisitions.length > 0 && (
-              <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 space-y-2">
-                <h2 className="font-medium text-amber-900">Pending material requisitions</h2>
-                {pendingRequisitions.map((r) => (
-                  <p key={r.id} className="text-sm text-amber-800">
-                    {r.itemName} — {r.quantityRequested} {r.unit || ""} ({r.urgency.toLowerCase()} urgency) — requested by{" "}
-                    {r.requestedBy?.name}
                   </p>
                 ))}
               </div>

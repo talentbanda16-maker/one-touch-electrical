@@ -150,16 +150,27 @@ export default function Actions() {
     }
   }
 
+  async function handleArchive(id) {
+    if (!window.confirm("Archive this action? It will be hidden from the active list.")) return;
+    setError("");
+    try {
+      await api.patch(`/actions/${id}/archive`, {});
+      loadActions();
+    } catch (err) {
+      setError(err.message || "Failed to archive action");
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+      <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">Action Tracker</p>
           <p className="font-medium text-slate-900">{user?.name}</p>
         </div>
         <button
           onClick={() => navigate("/dashboard")}
-          className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+          className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-sm hover:bg-white/10 transition-colors"
         >
           Back
         </button>
@@ -285,9 +296,16 @@ export default function Actions() {
           <ul className="space-y-2">
             {actions.map((a) => (
               <li key={a.id} className="border border-slate-100 rounded-md p-3 text-sm space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-medium">{a.project.name}</span>
-                  <span className={PRIORITY_COLORS[a.priority]}>{a.priority}</span>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {a.refNumber && (
+                      <span className="shrink-0 text-xs font-mono font-semibold text-blue-600 bg-blue-50 border border-blue-100 rounded px-1.5 py-0.5">
+                        {a.refNumber}
+                      </span>
+                    )}
+                    <span className="font-medium truncate">{a.project.name}</span>
+                  </div>
+                  <span className={`shrink-0 text-xs font-semibold ${PRIORITY_COLORS[a.priority]}`}>{a.priority}</span>
                 </div>
                 <p className="text-slate-700">{a.description}</p>
                 <div className="text-xs text-slate-500">
@@ -324,6 +342,14 @@ export default function Actions() {
                       className="ml-2 text-xs bg-green-600 text-white rounded px-2 py-1"
                     >
                       Verify &amp; close
+                    </button>
+                  )}
+                  {isManager && a.status === "CLOSED" && (
+                    <button
+                      onClick={() => handleArchive(a.id)}
+                      className="ml-2 text-xs text-slate-400 border border-slate-200 rounded px-2 py-1 hover:bg-slate-50"
+                    >
+                      Archive
                     </button>
                   )}
                 </div>

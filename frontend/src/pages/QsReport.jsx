@@ -10,7 +10,9 @@ const VARIATION_STATUSES = ["PENDING", "APPROVED", "REJECTED"];
 const EMPTY_LINE = {
   boqItemNumber: "",
   description: "",
+  unit: "",
   contractQuantity: "",
+  contractRate: "",
   quantityToday: "",
   cumulativeQuantity: "",
   measurements: "",
@@ -19,6 +21,26 @@ const EMPTY_LINE = {
   variationStatus: "",
   comments: "",
 };
+
+function calcAmounts(line) {
+  const rate   = parseFloat(line.contractRate);
+  const cqty   = parseFloat(line.contractQuantity);
+  const tqty   = parseFloat(line.quantityToday);
+  const prevCum = parseFloat(line._prevCumQty ?? line.cumulativeQuantity ?? 0);
+  if (!rate || isNaN(rate)) return null;
+  const cumqty = isNaN(tqty) ? prevCum : prevCum + tqty;
+  return {
+    contractAmount:   !isNaN(cqty) ? cqty  * rate : null,
+    periodAmount:     !isNaN(tqty) ? tqty  * rate : null,
+    cumulativeAmount: cumqty       * rate,
+    cumulativeQuantity: cumqty,
+  };
+}
+
+function fmtZAR(val) {
+  if (val == null || isNaN(val)) return "—";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(val);
+}
 
 export default function QsReport() {
   const { user } = useAuth();
@@ -46,10 +68,14 @@ export default function QsReport() {
   const [savingDraft, setSavingDraft] = useState(false);
 
   useEffect(() => {
+    const preselect = searchParams.get("projectId");
     api.get("/projects").then((data) => {
       setProjects(data);
-      if (data.length > 0) setProjectId(data[0].id);
+      const match = preselect && data.find((p) => p.id === preselect);
+      if (match) setProjectId(match.id);
+      else if (data.length > 0) setProjectId(data[0].id);
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -70,6 +96,26 @@ export default function QsReport() {
           setHasDraft(true);
         } else {
           setHasDraft(false);
+          // No draft — try to pre-fill from BOQ template
+          api.get(`/reports/qs/claim-prefill?projectId=${projectId}`).then((items) => {
+            if (items && items.length > 0) {
+              setLines(items.map((item) => ({
+                boqItemNumber: item.boqItemNumber,
+                description: item.description,
+                unit: item.unit,
+                contractQuantity: String(item.contractQuantity),
+                contractRate: String(item.contractRate),
+                quantityToday: "",
+                cumulativeQuantity: String(item.previousCumulativeQuantity),
+                measurements: "",
+                valuationAmount: "",
+                variationReference: "",
+                variationStatus: "",
+                comments: "",
+                _prevCumQty: item.previousCumulativeQuantity,
+              })));
+            }
+          }).catch(() => {});
         }
       })
       .catch(() => {});
@@ -123,7 +169,9 @@ export default function QsReport() {
       report.qsDetail.lines.map((l) => ({
         boqItemNumber: l.boqItemNumber,
         description: l.description,
+        unit: l.unit || "",
         contractQuantity: String(l.contractQuantity),
+        contractRate: l.contractRate != null ? String(l.contractRate) : "",
         quantityToday: String(l.quantityToday),
         cumulativeQuantity: String(l.cumulativeQuantity),
         measurements: l.measurements || "",
@@ -204,18 +252,26 @@ export default function QsReport() {
     setSuccess("");
     setSubmitting(true);
     try {
-      const lineData = lines.map((l) => ({
+      const lineData = lines.map((l) => {
+        const calculated = calcAmounts(l);
+        const cumQty = l._prevCumQty != null && calculated
+          ? calculated.cumulativeQuantity
+          : Number(l.cumulativeQuantity) || 0;
+        return {
         boqItemNumber: l.boqItemNumber,
         description: l.description,
+        unit: l.unit || undefined,
         contractQuantity: Number(l.contractQuantity) || 0,
+        contractRate: l.contractRate ? Number(l.contractRate) : undefined,
         quantityToday: Number(l.quantityToday) || 0,
-        cumulativeQuantity: Number(l.cumulativeQuantity) || 0,
+        cumulativeQuantity: cumQty,
         measurements: l.measurements || undefined,
         valuationAmount: l.valuationAmount ? Number(l.valuationAmount) : undefined,
         variationReference: l.variationReference || undefined,
         variationStatus: l.variationStatus || undefined,
         comments: l.comments || undefined,
-      }));
+        }; // return
+      }); // lineData
 
       let report;
       if (editingReportId) {
@@ -266,21 +322,16 @@ export default function QsReport() {
 
       stagedPhotos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
       setStagedPhotos([]);
-      setSuccess(
-        photoFailures > 0
-          ? `QS report ${editingReportId ? "resubmitted" : "submitted"}, but ${photoFailures} photo(s) failed to upload.`
-          : `QS report ${editingReportId ? "resubmitted" : "submitted"}.`
-      );
-      setComments("");
-      setCommercialIssues("");
-      setLines([{ ...EMPTY_LINE }]);
-      setEditingReportId(null);
-      setExistingAttachments([]);
-      setSubmissionId(crypto.randomUUID());
       if (hasDraft) {
         api.delete(`/drafts/QS?projectId=${projectId}`).catch(() => {});
-        setHasDraft(false);
       }
+      // Redirect to dashboard after a short delay so the QS sees the success message
+      setSuccess(
+        photoFailures > 0
+          ? `Claim submitted! ${photoFailures} photo(s) failed to upload. Returning to dashboard…`
+          : `Claim submitted successfully! Returning to dashboard…`
+      );
+      setTimeout(() => navigate("/dashboard/qs"), 2000);
     } catch (err) {
       setError(err.message || "Failed to submit report");
     } finally {
@@ -290,14 +341,14 @@ export default function QsReport() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+      <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">QS Report</p>
           <p className="font-medium text-slate-900">{user?.name}</p>
         </div>
         <button
           onClick={() => navigate("/dashboard")}
-          className="text-sm text-slate-600 border border-slate-300 rounded-md px-3 py-2"
+          className="text-slate-300 border border-slate-600 rounded-lg px-3 py-1.5 text-sm hover:bg-white/10 transition-colors"
         >
           Back
         </button>
@@ -407,6 +458,19 @@ export default function QsReport() {
                   />
                 </div>
                 <div>
+                  <label className="block text-xs text-slate-500 mb-1">Unit (m, Nr, m², etc.)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. m, Nr, m²"
+                    value={line.unit}
+                    onChange={(e) => updateLine(i, "unit", e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
                   <label className="block text-xs text-slate-500 mb-1">Contract qty *</label>
                   <input
                     type="number"
@@ -418,7 +482,40 @@ export default function QsReport() {
                     className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
                   />
                 </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Contract rate ($ per unit)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={line.contractRate}
+                    onChange={(e) => updateLine(i, "contractRate", e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+                  />
+                </div>
               </div>
+
+              {(() => {
+                const amounts = calcAmounts(line);
+                if (!amounts) return null;
+                return (
+                  <div className="grid grid-cols-3 gap-2 bg-green-50 border border-green-200 rounded-md p-3">
+                    <div>
+                      <p className="text-xs text-green-700 font-medium mb-1">Contract amount</p>
+                      <p className="text-sm font-semibold text-green-900">{fmtZAR(amounts.contractAmount)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-green-700 font-medium mb-1">This period claim</p>
+                      <p className="text-sm font-bold text-green-900">{fmtZAR(amounts.periodAmount)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-green-700 font-medium mb-1">Cumulative claim</p>
+                      <p className="text-sm font-semibold text-green-900">{fmtZAR(amounts.cumulativeAmount)}</p>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div>
                 <label className="block text-xs text-slate-500 mb-1">Description *</label>
@@ -445,16 +542,24 @@ export default function QsReport() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Cumulative qty *</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    required
-                    value={line.cumulativeQuantity}
-                    onChange={(e) => updateLine(i, "cumulativeQuantity", e.target.value)}
-                    className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
-                  />
+                  <label className="block text-xs text-slate-500 mb-1">
+                    Cumulative qty {line._prevCumQty != null ? "(auto)" : "*"}
+                  </label>
+                  {line._prevCumQty != null ? (
+                    <div className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-600">
+                      {(() => { const a = calcAmounts(line); return a ? a.cumulativeQuantity.toFixed(2) : (parseFloat(line._prevCumQty) || 0).toFixed(2); })()}
+                    </div>
+                  ) : (
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      required
+                      value={line.cumulativeQuantity}
+                      onChange={(e) => updateLine(i, "cumulativeQuantity", e.target.value)}
+                      className="w-full rounded-md border border-slate-300 px-3 py-3 text-base"
+                    />
+                  )}
                 </div>
               </div>
 
@@ -611,13 +716,22 @@ export default function QsReport() {
                     {l.boqItemNumber} — {l.description}: {l.percentCompletion}% (balance {l.balanceQuantity})
                   </div>
                 ))}
-                <button
-                  type="button"
-                  onClick={() => navigate(`/actions?sourceReportId=${r.id}&projectId=${projectId}&reportType=QS`)}
-                  className="text-xs text-blue-600 underline mt-1"
-                >
-                  Raise action from this report
-                </button>
+                <div className="flex gap-3 mt-1">
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/actions?sourceReportId=${r.id}&projectId=${projectId}&reportType=QS`)}
+                    className="text-xs text-blue-600 underline"
+                  >
+                    Raise action from this report
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => api.download(`/reports/qs/${r.id}/export`, `QS_Valuation_${r.id.slice(0, 8)}.xlsx`)}
+                    className="text-xs text-green-700 underline"
+                  >
+                    Export to Excel
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

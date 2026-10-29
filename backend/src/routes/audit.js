@@ -39,6 +39,16 @@ router.get("/", requireAuth, requireRole("MANAGEMENT"), async (req, res) => {
   res.json({ logs, total, page: pageNum, pageSize: PAGE_SIZE, totalPages: Math.max(1, Math.ceil(total / PAGE_SIZE)) });
 });
 
+// Full history of a single record — all audit events for that entityId.
+router.get("/entity/:entityId", requireAuth, requireRole("MANAGEMENT"), async (req, res) => {
+  const logs = await prisma.auditLog.findMany({
+    where: { entityId: req.params.entityId },
+    include: { user: { select: { id: true, name: true, email: true, role: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  res.json(logs);
+});
+
 // Distinct action/entityType values actually present, so the frontend
 // can offer real filter dropdowns instead of a hardcoded guess.
 router.get("/filters", requireAuth, requireRole("MANAGEMENT"), async (_req, res) => {

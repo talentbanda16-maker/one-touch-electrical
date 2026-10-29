@@ -115,13 +115,20 @@ router.post("/", requireAuth, requireRole(), async (req, res) => {
 // Technical Manager sees every project; everyone else sees only
 // what they're assigned to, per the brief's "assigned projects" rule.
 router.get("/", requireAuth, async (req, res) => {
+  const showArchived = req.query.archived === "true";
+  const archivedFilter = { isArchived: showArchived };
+
   if (req.user.role === "TECHNICAL_MANAGER" || req.user.role === "MANAGEMENT") {
-    const projects = await prisma.project.findMany({ orderBy: { createdAt: "desc" }, include: PROJECT_MANAGER_INCLUDE });
+    const projects = await prisma.project.findMany({
+      where: archivedFilter,
+      orderBy: { createdAt: "desc" },
+      include: PROJECT_MANAGER_INCLUDE,
+    });
     return res.json(projects);
   }
 
   const projects = await prisma.project.findMany({
-    where: { assignments: { some: { userId: req.user.id } } },
+    where: { assignments: { some: { userId: req.user.id } }, ...archivedFilter },
     orderBy: { createdAt: "desc" },
     include: PROJECT_MANAGER_INCLUDE,
   });
@@ -305,10 +312,45 @@ router.get("/:projectId/qs-analytics", requireAuth, requireRole("MANAGEMENT"), a
   res.json(await computeQsAnalytics(project));
 });
 
-router.get("/:projectId/stores-analytics", requireAuth, requireRole("MANAGEMENT"), async (req, res) => {
+router.get("/:projectId/stores-analytics", requireAuth, requireRole("MANAGEMENT", "TECHNICAL_MANAGER", "ENGINEER", "FOREMAN", "STORESMAN"), async (req, res) => {
   const project = await prisma.project.findUnique({ where: { id: req.params.projectId } });
   if (!project) return res.status(404).json({ error: "Project not found" });
   res.json(await computeStoresAnalytics(project));
+});
+
+// Live stock balance direct from transaction lines — no report approval needed.
+router.get("/:projectId/stock-balance", requireAuth, requireProjectAccess, async (req, res) => {
+  const lines = await prisma.stockTransactionLine.findMany({
+    where: {
+      storesReportDetail: {
+        report: { projectId: req.params.projectId },
+      },
+    },
+    select: { itemName: true, direction: true, quantity: true, unit: true, storesReportDetail: { select: { report: { select: { reportDate: true } } } } },
+    orderBy: { storesReportDetail: { report: { reportDate: "asc" } } },
+  });
+
+  const byItem = new Map();
+  for (const l of lines) {
+    if (!byItem.has(l.itemName)) {
+      byItem.set(l.itemName, { itemName: l.itemName, unit: l.unit, received: 0, issued: 0, returned: 0, damagedLost: 0, lastDate: null });
+    }
+    const item = byItem.get(l.itemName);
+    const qty = Number(l.quantity);
+    if (l.direction === "RECEIVED")     item.received    += qty;
+    else if (l.direction === "ISSUED")  item.issued      += qty;
+    else if (l.direction === "RETURNED") item.returned   += qty;
+    else if (l.direction === "DAMAGED_LOST") item.damagedLost += qty;
+    const d = l.storesReportDetail?.report?.reportDate;
+    if (d && (!item.lastDate || new Date(d) > new Date(item.lastDate))) item.lastDate = d;
+  }
+
+  const items = Array.from(byItem.values()).map((i) => ({
+    ...i,
+    balance: i.received - i.issued + i.returned - i.damagedLost,
+  }));
+
+  res.json({ items });
 });
 
 router.get("/:projectId/she-analytics", requireAuth, requireRole("MANAGEMENT"), async (req, res) => {
@@ -509,6 +551,100 @@ router.get("/:projectId/reports/department", requireAuth, requireProjectAccess, 
   const wb = await generateDepartmentReportExcel(data);
   await wb.xlsx.write(res);
   res.end();
+});
+
+// ── Project BOQ template ──────────────────────────────────────────────────────
+router.get("/:id/boq", requireAuth, async (req, res) => {
+  const items = await prisma.projectBoqItem.findMany({
+    where: { projectId: req.params.id },
+    orderBy: { order: "asc" },
+  });
+  res.json(items.map((i) => ({
+    id: i.id,
+    order: i.order,
+    boqItemNumber: i.boqItemNumber,
+    description: i.description,
+    unit: i.unit,
+    contractQuantity: Number(i.contractQuantity),
+    contractRate: Number(i.contractRate),
+    contractAmount: Number(i.contractQuantity) * Number(i.contractRate),
+  })));
+});
+
+const boqItemSchema = z.object({
+  boqItemNumber: z.string().min(1).max(50),
+  description: z.string().min(1).max(500),
+  unit: z.string().max(20).default(""),
+  contractQuantity: z.number().nonnegative().max(9999999),
+  contractRate: z.number().nonnegative().max(9999999),
+});
+
+router.put("/:id/boq", requireAuth, requireRole("QS"), async (req, res) => {
+  const projectId = req.params.id;
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const parsed = z.array(boqItemSchema).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  await prisma.$transaction([
+    prisma.projectBoqItem.deleteMany({ where: { projectId } }),
+    prisma.projectBoqItem.createMany({
+      data: parsed.data.map((item, i) => ({
+        projectId,
+        order: i,
+        boqItemNumber: item.boqItemNumber,
+        description: item.description,
+        unit: item.unit,
+        contractQuantity: item.contractQuantity,
+        contractRate: item.contractRate,
+      })),
+    }),
+  ]);
+
+  res.json({ ok: true });
+});
+
+// Archive a project (soft-delete) — Technical Manager only.
+router.patch("/:projectId/archive", requireAuth, requireRole(), async (req, res) => {
+  const project = await prisma.project.findUnique({ where: { id: req.params.projectId } });
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const updated = await prisma.project.update({
+    where: { id: req.params.projectId },
+    data: { isArchived: true, status: "CLOSED" },
+    include: PROJECT_MANAGER_INCLUDE,
+  });
+
+  await recordAudit({
+    userId: req.user.id,
+    action: "PROJECT_ARCHIVED",
+    entityType: "Project",
+    entityId: project.id,
+  });
+
+  res.json(updated);
+});
+
+// Restore an archived project — Technical Manager only.
+router.patch("/:projectId/restore", requireAuth, requireRole(), async (req, res) => {
+  const project = await prisma.project.findUnique({ where: { id: req.params.projectId } });
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const updated = await prisma.project.update({
+    where: { id: req.params.projectId },
+    data: { isArchived: false },
+    include: PROJECT_MANAGER_INCLUDE,
+  });
+
+  await recordAudit({
+    userId: req.user.id,
+    action: "PROJECT_RESTORED",
+    entityType: "Project",
+    entityId: project.id,
+  });
+
+  res.json(updated);
 });
 
 module.exports = router;
