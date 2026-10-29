@@ -60,6 +60,7 @@ export default function AuditLog() {
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const openedAtRef = useRef(0);
+  const blockOverlayRef = useRef(false);
 
   useEffect(() => {
     api.get("/audit/filters").then(setFilters).catch(() => {});
@@ -77,6 +78,8 @@ export default function AuditLog() {
 
   async function openDetail(log) {
     openedAtRef.current = Date.now();
+    blockOverlayRef.current = true;
+    setTimeout(() => { blockOverlayRef.current = false; }, 800);
     setSelected(log);
     setHistory([]);
     setHistoryLoading(true);
@@ -91,7 +94,8 @@ export default function AuditLog() {
   }
 
   function closeDetail() {
-    if (Date.now() - openedAtRef.current > 400) setSelected(null);
+    if (blockOverlayRef.current) return;
+    setSelected(null);
   }
 
   return (
