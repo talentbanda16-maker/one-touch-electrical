@@ -485,6 +485,8 @@ function BoqTab({ projectId, projectName }) {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [pendingWb, setPendingWb] = useState(null);
+  const [sheetPickerOpen, setSheetPickerOpen] = useState(false);
   const fileInputRef = useRef(null);
 
   const loadData = (pid) => {
@@ -523,6 +525,39 @@ function BoqTab({ projectId, projectName }) {
     setSaving(false);
   };
 
+  const parseAndSaveSheet = async (wb, sheetName) => {
+    setUploadError("");
+    const ws = wb.Sheets[sheetName];
+    const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+    if (raw.length < 2) { setUploadError("Sheet appears empty."); return; }
+    let headerRowIdx = -1, headers = [], fieldMap = [];
+    for (let r = 0; r < Math.min(15, raw.length); r++) {
+      const fm = raw[r].map(mapBoqHeader);
+      if (fm.includes("description")) { headerRowIdx = r; headers = raw[r]; fieldMap = fm; break; }
+    }
+    if (headerRowIdx === -1) { setUploadError(`No Description column found in first 15 rows of "${sheetName}".`); return; }
+    const parsed = [];
+    for (let i = headerRowIdx + 1; i < raw.length; i++) {
+      const row = raw[i];
+      if (row.every(c => String(c).trim() === "")) continue;
+      const obj = { boqItemNumber: String(i - headerRowIdx), description: "", unit: "", contractQuantity: "", contractRate: "" };
+      headers.forEach((_, hi) => { if (fieldMap[hi]) obj[fieldMap[hi]] = String(row[hi] ?? ""); });
+      if (!obj.description.trim()) continue;
+      parsed.push(obj);
+    }
+    if (parsed.length === 0) { setUploadError("No valid rows found after the header row."); return; }
+    setSaving(true);
+    try {
+      await api.put(`/projects/${projectId}/boq`, parsed.map(r => ({
+        boqItemNumber: r.boqItemNumber.trim(), description: r.description.trim(),
+        unit: r.unit.trim(), contractQuantity: parseFloat(r.contractQuantity) || 0, contractRate: parseFloat(r.contractRate) || 0,
+      })));
+      await api.post("/procurement/sync-from-boq", { projectId }).catch(() => {});
+      loadData(projectId);
+    } catch { setUploadError("Upload failed — could not save to server."); }
+    setSaving(false);
+  };
+
   const handleExcelUpload = (e) => {
     setUploadError("");
     const file = e.target.files?.[0];
@@ -531,41 +566,12 @@ function BoqTab({ projectId, projectName }) {
     reader.onload = async (evt) => {
       try {
         const wb = XLSX.read(evt.target.result, { type: "array" });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-        if (raw.length < 2) { setUploadError("Sheet appears empty."); return; }
-
-        // Find the actual header row (scan first 15 rows for one containing a description-like column)
-        let headerRowIdx = -1;
-        let headers = [];
-        let fieldMap = [];
-        for (let r = 0; r < Math.min(15, raw.length); r++) {
-          const fm = raw[r].map(mapBoqHeader);
-          if (fm.includes("description")) { headerRowIdx = r; headers = raw[r]; fieldMap = fm; break; }
+        if (wb.SheetNames.length === 1) {
+          await parseAndSaveSheet(wb, wb.SheetNames[0]);
+        } else {
+          setPendingWb(wb);
+          setSheetPickerOpen(true);
         }
-        if (headerRowIdx === -1) { setUploadError(`Could not find a Description column in the first 15 rows. First row headers: ${raw[0].map(h => `"${h}"`).join(", ")}`); return; }
-
-        const parsed = [];
-        for (let i = headerRowIdx + 1; i < raw.length; i++) {
-          const row = raw[i];
-          if (row.every(c => String(c).trim() === "")) continue;
-          const obj = { boqItemNumber: String(i - headerRowIdx), description: "", unit: "", contractQuantity: "", contractRate: "" };
-          headers.forEach((_, hi) => { if (fieldMap[hi]) obj[fieldMap[hi]] = String(row[hi] ?? ""); });
-          if (!obj.description.trim()) continue;
-          parsed.push(obj);
-        }
-        if (parsed.length === 0) { setUploadError("No valid rows found after the header row."); return; }
-        // Save directly — no editing step
-        setSaving(true);
-        try {
-          await api.put(`/projects/${projectId}/boq`, parsed.map(r => ({
-            boqItemNumber: r.boqItemNumber.trim(), description: r.description.trim(),
-            unit: r.unit.trim(), contractQuantity: parseFloat(r.contractQuantity) || 0, contractRate: parseFloat(r.contractRate) || 0,
-          })));
-          await api.post("/procurement/sync-from-boq", { projectId }).catch(() => {});
-          loadData(projectId);
-        } catch { setUploadError("Upload failed — could not save to server."); }
-        setSaving(false);
       } catch { setUploadError("Could not read file. Make sure it is a valid .xlsx or .xls file."); }
     };
     reader.readAsArrayBuffer(file);
@@ -616,6 +622,28 @@ function BoqTab({ projectId, projectName }) {
         Upload Excel BOQ
       </button>
       {uploadError && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{uploadError}</p>}
+
+      {/* Sheet picker modal for multi-sheet Excel files */}
+      {sheetPickerOpen && pendingWb && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => { setSheetPickerOpen(false); setPendingWb(null); }}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4 p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div>
+              <p className="font-bold text-slate-900 text-base">Choose a sheet to import</p>
+              <p className="text-xs text-slate-500 mt-1">This file has {pendingWb.SheetNames.length} sheets. Select which bill to load into the BOQ.</p>
+            </div>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {pendingWb.SheetNames.map((name) => (
+                <button key={name} onClick={async () => { setSheetPickerOpen(false); await parseAndSaveSheet(pendingWb, name); setPendingWb(null); }}
+                  className="w-full text-left px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-blue-50 hover:border-blue-300 text-sm font-medium text-slate-800 transition-colors">
+                  {name}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => { setSheetPickerOpen(false); setPendingWb(null); }}
+              className="w-full text-center text-xs text-slate-400 underline">Cancel</button>
+          </div>
+        </div>
+      )}
       {saving && <p className="text-sm text-blue-600 text-center py-2">Saving…</p>}
       {loading && <p className="text-sm text-slate-400 text-center py-6">Loading...</p>}
       {!loading && template.length === 0 && (
