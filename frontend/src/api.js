@@ -17,7 +17,7 @@ function errorMessageFrom(data, fallback) {
   return fallback;
 }
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "https://concepts-certified-expanded-cabin.trycloudflare.com";
+const API_BASE = import.meta.env.VITE_API_URL || "";
 
 let accessToken = null;
 
@@ -133,7 +133,7 @@ async function uploadFile(path, formData) {
   return res.json();
 }
 
-async function refreshAccessToken() {
+export async function refreshAccessToken() {
   try {
     const res = await fetch(`${API_BASE}/api/auth/refresh`, { method: "POST", credentials: "include" });
     if (!res.ok) return false;
