@@ -91,6 +91,7 @@ model User {
   productivityReportsSubmitted ProductivityReport[] @relation("ProductivityReportSubmitter")
   productivityReportsReviewed  ProductivityReport[] @relation("ProductivityReportReviewer")
   productivityReportsFinalized ProductivityReport[] @relation("ProductivityReportFinalizer")
+  comments                     Comment[]            @relation("CommentAuthor")
 
   @@map("users")
 }
@@ -139,6 +140,7 @@ model Project {
   claimItems     ClaimItem[]
   incomeItems    IncomeItem[]
   expenseItems   ExpenseItem[]
+  comments       Comment[]
 
   @@map("projects")
 }
@@ -981,4 +983,24 @@ model ProgressLog {
   project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@map("progress_logs")
+}
+
+// ---------- Comments / Chatter ----------
+// Polymorphic: entityType is e.g. "MaterialRequisition", "Action", "Instruction";
+// entityId is the record's UUID. projectId is denormalized for access checks.
+model Comment {
+  id         String   @id @default(uuid())
+  entityType String
+  entityId   String
+  projectId  String
+  authorId   String
+  body       String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  author  User    @relation("CommentAuthor", fields: [authorId], references: [id])
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@index([entityType, entityId])
+  @@map("comments")
 }

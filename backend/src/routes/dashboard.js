@@ -135,6 +135,40 @@ router.get("/projects-progress", requireAuth, requireRole("MANAGEMENT"), async (
   res.json(results);
 });
 
+// Project KPIs — completion %, budget vs actual, days on site, pending reqs, open actions.
+router.get("/kpis", requireAuth, requireRole("MANAGEMENT"), async (_req, res) => {
+  const fmtN = (v) => (v != null ? Number(v) : 0);
+  const now = new Date();
+  const projects = await prisma.project.findMany({ where: { isArchived: false }, orderBy: { name: "asc" } });
+
+  const kpis = await Promise.all(projects.map(async (p) => {
+    const [analytics, bomItems, pendingReqs, openActions] = await Promise.all([
+      computeProjectAnalytics(p),
+      prisma.bomItem.findMany({ where: { projectId: p.id, isArchived: false }, select: { qtyNeeded: true, qtyOrdered: true, unitPrice: true, budgetUnitPrice: true } }),
+      prisma.materialRequisition.count({ where: { projectId: p.id, status: "PENDING", isArchived: false } }),
+      prisma.action.count({ where: { projectId: p.id, status: { in: ["OPEN", "IN_PROGRESS"] } } }),
+    ]);
+
+    const budgetCost = bomItems.reduce((s, i) => s + fmtN(i.qtyNeeded) * fmtN(i.budgetUnitPrice), 0);
+    const actualCost = bomItems.reduce((s, i) => s + fmtN(i.qtyOrdered) * fmtN(i.unitPrice), 0);
+    const daysOnSite = p.startDate ? Math.max(0, Math.floor((now - new Date(p.startDate)) / 86400000)) : null;
+    const daysRemaining = p.plannedEndDate ? Math.max(0, Math.floor((new Date(p.plannedEndDate) - now) / 86400000)) : null;
+    const totalDays = p.startDate && p.plannedEndDate ? Math.floor((new Date(p.plannedEndDate) - new Date(p.startDate)) / 86400000) : null;
+
+    return {
+      id: p.id, name: p.name, code: p.code, status: p.status,
+      completion: analytics.progress?.actualProgress ?? 0,
+      plannedProgress: analytics.progress?.plannedProgress ?? null,
+      budgetCost, actualCost,
+      variance: actualCost - budgetCost,
+      daysOnSite, daysRemaining, totalDays,
+      pendingReqs, openActions,
+    };
+  }));
+
+  res.json(kpis);
+});
+
 // QS user dashboard summary — per-project financials + claim timeline
 router.get("/qs-summary", requireAuth, requireRole("QS", "FINANCE"), async (req, res) => {
   const fmtN = (v) => (v != null ? Number(v) : 0);

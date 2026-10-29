@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+import CommentThread from "../components/CommentThread";
 
 const PRIORITIES = ["LOW", "MEDIUM", "HIGH"];
 const PRIORITY_COLORS = { LOW: "text-slate-600", MEDIUM: "text-amber-700", HIGH: "text-red-700" };
@@ -25,6 +26,7 @@ export default function Actions() {
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [attachmentsByAction, setAttachmentsByAction] = useState({});
+  const [commentsOpen, setCommentsOpen] = useState({});
 
   const [form, setForm] = useState({
     projectId: sourceProjectId,
@@ -352,6 +354,17 @@ export default function Actions() {
                       Archive
                     </button>
                   )}
+                </div>
+
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setCommentsOpen((prev) => ({ ...prev, [a.id]: !prev[a.id] }))}
+                    className="text-xs text-blue-600 hover:underline"
+                  >
+                    {commentsOpen[a.id] ? "Hide comments" : "Comments"}
+                  </button>
+                  {commentsOpen[a.id] && <CommentThread entityType="Action" entityId={a.id} />}
                 </div>
 
                 <div className="pt-2 border-t border-slate-100 space-y-1">

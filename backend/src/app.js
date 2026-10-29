@@ -73,6 +73,7 @@ app.use("/api/audit", auditRoutes);
 app.use("/api/productivity-reports", productivityRoutes);
 app.use("/api/progress", progressRoutes);
 app.use("/api/procurement", require("./routes/procurement"));
+app.use("/api/comments", require("./routes/comments"));
 
 app.use((err, _req, res, _next) => {
   console.error(err);

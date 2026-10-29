@@ -63,8 +63,18 @@ router.post("/projects/:projectId/requisitions", requireAuth, requireProjectMemb
 
 router.get("/projects/:projectId/requisitions", requireAuth, requireProjectAccess, async (req, res) => {
   const showArchived = req.query.archived === "true";
+  const { status, urgency, search, from, to } = req.query;
+  const where = { projectId: req.params.projectId, isArchived: showArchived };
+  if (status) where.status = status;
+  if (urgency) where.urgency = urgency;
+  if (search) where.itemName = { contains: search, mode: "insensitive" };
+  if (from || to) {
+    where.requestedAt = {};
+    if (from) where.requestedAt.gte = new Date(from);
+    if (to) where.requestedAt.lte = new Date(to);
+  }
   const requisitions = await prisma.materialRequisition.findMany({
-    where: { projectId: req.params.projectId, isArchived: showArchived },
+    where,
     include: {
       requestedBy: { select: { id: true, name: true } },
       approvedBy: { select: { id: true, name: true } },
@@ -186,6 +196,28 @@ router.patch("/requisitions/:id/approve", requireAuth, async (req, res) => {
   });
 
   res.json(updated);
+});
+
+// Bulk approve or reject — Technical Manager only.
+router.post("/requisitions/bulk-action", requireAuth, async (req, res) => {
+  if (req.user.role !== "TECHNICAL_MANAGER") {
+    return res.status(403).json({ error: "Only the Technical Manager can bulk-approve/reject" });
+  }
+  const { ids, action: bulkAction, rejectionReason } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids required" });
+  if (!["APPROVED", "REJECTED"].includes(bulkAction)) return res.status(400).json({ error: "action must be APPROVED or REJECTED" });
+
+  const results = await Promise.allSettled(ids.map(async (id) => {
+    const req_ = await prisma.materialRequisition.findUnique({ where: { id } });
+    if (!req_ || req_.status !== "PENDING") return;
+    await prisma.materialRequisition.update({
+      where: { id },
+      data: { status: bulkAction, approvedById: req.user.id, approvedAt: new Date(), rejectionReason: bulkAction === "REJECTED" ? (rejectionReason ?? null) : null },
+    });
+    await recordAudit({ userId: req.user.id, action: bulkAction === "APPROVED" ? "REQUISITION_APPROVED" : "REQUISITION_REJECTED", entityType: "MaterialRequisition", entityId: id, metadata: { bulk: true } });
+  }));
+  const done = results.filter((r) => r.status === "fulfilled").length;
+  res.json({ updated: done });
 });
 
 // Archive a requisition (soft-delete) — Technical Manager only.

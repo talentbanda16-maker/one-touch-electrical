@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+import CommentThread from "../components/CommentThread";
 
 const PRIORITIES = ["LOW", "MEDIUM", "HIGH"];
 const PRIORITY_COLORS = { LOW: "text-slate-600", MEDIUM: "text-amber-700", HIGH: "text-red-700" };
@@ -19,6 +20,7 @@ export default function Instructions() {
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [attachmentsByInstruction, setAttachmentsByInstruction] = useState({});
+  const [commentsOpen, setCommentsOpen] = useState({});
 
   const [form, setForm] = useState({
     projectId: "",
@@ -313,6 +315,17 @@ export default function Instructions() {
                       Archive
                     </button>
                   )}
+                </div>
+
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setCommentsOpen((prev) => ({ ...prev, [i.id]: !prev[i.id] }))}
+                    className="text-xs text-blue-600 hover:underline"
+                  >
+                    {commentsOpen[i.id] ? "Hide comments" : "Comments"}
+                  </button>
+                  {commentsOpen[i.id] && <CommentThread entityType="Instruction" entityId={i.id} />}
                 </div>
 
                 <div className="pt-2 border-t border-slate-100 space-y-1">

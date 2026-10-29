@@ -53,6 +53,20 @@ router.get("/", requireAuth, requireRole("QS", "FINANCE", "TECHNICAL_MANAGER", "
   res.json(items.map(enrichItem));
 });
 
+// GET /procurement/item/:id — single BOM item detail (for audit log panel)
+router.get("/item/:id", requireAuth, requireRole("QS", "FINANCE", "TECHNICAL_MANAGER", "MANAGEMENT", "STORESMAN"), async (req, res) => {
+  const item = await prisma.bomItem.findUnique({
+    where: { id: req.params.id },
+    include: {
+      createdBy: { select: { id: true, name: true, role: true } },
+      usageLogs: { include: { recordedBy: { select: { name: true } } }, orderBy: { date: "desc" } },
+      stockTransactions: { select: { direction: true, quantity: true } },
+    },
+  });
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  res.json(enrichItem(item));
+});
+
 // POST /procurement/sync-from-boq — auto-create BOM items from BOQ template
 router.post("/sync-from-boq", requireAuth, requireRole("QS"), async (req, res) => {
   const { projectId } = req.body;

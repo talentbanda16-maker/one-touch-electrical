@@ -59,6 +59,7 @@ export default function AuditLog() {
   const [selected, setSelected] = useState(null);
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [bomDetail, setBomDetail] = useState(null);
   const openedAtRef = useRef(0);
   const blockOverlayRef = useRef(false);
 
@@ -81,11 +82,16 @@ export default function AuditLog() {
     blockOverlayRef.current = true;
     setTimeout(() => { blockOverlayRef.current = false; }, 800);
     setSelected(log);
+    setBomDetail(null);
     setHistory([]);
     setHistoryLoading(true);
     try {
-      const h = await api.get(`/audit/entity/${log.entityId}`);
+      const [h, bom] = await Promise.all([
+        log.entityId ? api.get(`/audit/entity/${log.entityId}`) : Promise.resolve([]),
+        log.entityType === "BomItem" && log.entityId ? api.get(`/procurement/item/${log.entityId}`) : Promise.resolve(null),
+      ]);
       setHistory(h);
+      setBomDetail(bom);
     } catch {
       setHistory([]);
     } finally {
@@ -96,6 +102,7 @@ export default function AuditLog() {
   function closeDetail() {
     if (blockOverlayRef.current) return;
     setSelected(null);
+    setBomDetail(null);
   }
 
   return (
@@ -185,8 +192,8 @@ export default function AuditLog() {
 
       {/* Detail panel */}
       {selected && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40" onClick={closeDetail}>
-          <div className="bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex justify-end" style={{ backgroundColor: "rgba(0,0,0,0.4)" }} onClick={closeDetail}>
+          <div className="bg-white w-full max-w-sm h-full flex flex-col shadow-2xl rounded-l-2xl" onClick={(e) => e.stopPropagation()}>
             {/* Panel header */}
             <div className="px-4 py-4 border-b border-slate-100 flex items-start justify-between">
               <div>
@@ -210,6 +217,40 @@ export default function AuditLog() {
                 <p className="text-sm font-medium text-slate-800">{selected.entityType}</p>
                 <p className="text-xs font-mono text-slate-500">{selected.entityId}</p>
               </div>
+
+              {/* BOM item full BOQ detail */}
+              {bomDetail && (
+                <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 space-y-2">
+                  <p className="text-xs font-bold text-blue-400 uppercase tracking-wide">BOQ Details</p>
+                  <p className="text-sm font-semibold text-slate-800 leading-snug">{bomDetail.name}</p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <span className="text-slate-500">Unit</span>
+                    <span className="text-slate-800 font-medium text-right">{bomDetail.unit || "—"}</span>
+                    <span className="text-slate-500">BOQ Qty</span>
+                    <span className="text-slate-800 font-medium text-right">{bomDetail.qtyNeeded?.toLocaleString() ?? "—"}</span>
+                    <span className="text-slate-500">Budget Rate</span>
+                    <span className="text-slate-800 font-medium text-right">{bomDetail.budgetUnitPrice ? `$${Number(bomDetail.budgetUnitPrice).toLocaleString()}` : "—"}</span>
+                    <span className="text-slate-500">Budget Cost</span>
+                    <span className="text-slate-800 font-medium text-right">{bomDetail.budgetCost ? `$${Number(bomDetail.budgetCost).toLocaleString()}` : "—"}</span>
+                    <span className="text-slate-500">Qty Ordered</span>
+                    <span className="text-slate-800 font-medium text-right">{bomDetail.qtyOrdered?.toLocaleString() ?? "—"}</span>
+                    <span className="text-slate-500">Qty Delivered</span>
+                    <span className="text-slate-800 font-medium text-right">{bomDetail.qtyDelivered?.toLocaleString() ?? "—"}</span>
+                    <span className="text-slate-500">Stock Balance</span>
+                    <span className={`font-bold text-right ${bomDetail.balance <= 0 ? "text-red-600" : "text-green-700"}`}>{bomDetail.balance?.toLocaleString() ?? "—"}</span>
+                    <span className="text-slate-500">Actual Cost</span>
+                    <span className="text-slate-800 font-medium text-right">{bomDetail.totalCost ? `$${Number(bomDetail.totalCost).toLocaleString()}` : "—"}</span>
+                    <span className="text-slate-500">Variance</span>
+                    <span className={`font-bold text-right ${bomDetail.variance > 0 ? "text-red-600" : bomDetail.variance < 0 ? "text-green-700" : "text-slate-400"}`}>
+                      {bomDetail.variance != null ? `${bomDetail.variance > 0 ? "+" : ""}$${Math.abs(bomDetail.variance).toLocaleString()}` : "—"}
+                    </span>
+                    {bomDetail.createdBy && <>
+                      <span className="text-slate-500">Added by</span>
+                      <span className="text-slate-800 font-medium text-right">{bomDetail.createdBy.name}</span>
+                    </>}
+                  </div>
+                </div>
+              )}
 
               {/* Metadata */}
               {selected.metadata && Object.keys(selected.metadata).length > 0 && (

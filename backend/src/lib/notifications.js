@@ -7,6 +7,7 @@ const ROLE_LABELS = { FOREMAN: "Foreman", QS: "QS", SHE_OFFICER: "SHE", STORESMA
 
 const DUE_SOON_DAYS = 2;
 const FUND_UTILISATION_THRESHOLD = 90;
+const PENDING_REQUISITION_REMINDER_DAYS = 2;
 
 function startOfToday() {
   const now = new Date();
@@ -95,6 +96,24 @@ async function generateSystemNotifications() {
         projectId: project.id,
         link: "/analytics",
         dedupeKey: `FUND_UTILISATION_THRESHOLD:${project.id}:${todayKey}`,
+      });
+    }
+
+    // Pending requisitions older than X days — remind TM to action them.
+    const staleDate = new Date(now);
+    staleDate.setDate(staleDate.getDate() - PENDING_REQUISITION_REMINDER_DAYS);
+    const staleReqs = await prisma.materialRequisition.findMany({
+      where: { projectId: project.id, status: "PENDING", requestedAt: { lte: staleDate }, isArchived: false },
+      select: { id: true, itemName: true, requestedAt: true },
+    });
+    if (staleReqs.length > 0) {
+      await notifyManagers({
+        type: "REQUISITION_SUBMITTED",
+        title: `${staleReqs.length} requisition(s) awaiting approval on ${project.name}`,
+        message: `${staleReqs.length} material request(s) have been pending for ${PENDING_REQUISITION_REMINDER_DAYS}+ days: ${staleReqs.slice(0, 3).map((r) => r.itemName).join(", ")}${staleReqs.length > 3 ? "…" : ""}.`,
+        projectId: project.id,
+        link: "/analytics/stores",
+        dedupeKey: `PENDING_REQS_REMINDER:${project.id}:${todayKey}`,
       });
     }
 

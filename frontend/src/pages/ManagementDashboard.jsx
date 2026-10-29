@@ -133,6 +133,16 @@ export default function ManagementDashboard() {
                 alert={summary.sheIncidents.last30Days > 0}
                 onClick={() => navigate("/analytics/she")}
               />
+              <StatTile
+                label="Project KPIs"
+                value="View"
+                onClick={() => navigate("/dashboard/kpis")}
+              />
+              <StatTile
+                label="Activity Timeline"
+                value="View"
+                onClick={() => navigate("/dashboard/timeline")}
+              />
             </div>
 
             {delegatedActions.length > 0 && (

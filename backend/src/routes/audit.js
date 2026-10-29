@@ -49,6 +49,18 @@ router.get("/entity/:entityId", requireAuth, requireRole("MANAGEMENT"), async (r
   res.json(logs);
 });
 
+// Per-project timeline — all events for a project, newest-first, capped
+// at 200 to keep the response lean. Used by the Activity Timeline page.
+router.get("/project/:projectId/timeline", requireAuth, requireRole("TECHNICAL_MANAGER", "MANAGEMENT"), async (req, res) => {
+  const logs = await prisma.auditLog.findMany({
+    where: { metadata: { path: ["projectId"], equals: req.params.projectId } },
+    include: { user: { select: { id: true, name: true, role: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
+  res.json(logs);
+});
+
 // Distinct action/entityType values actually present, so the frontend
 // can offer real filter dropdowns instead of a hardcoded guess.
 router.get("/filters", requireAuth, requireRole("MANAGEMENT"), async (_req, res) => {

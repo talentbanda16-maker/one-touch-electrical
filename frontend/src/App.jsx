@@ -59,6 +59,8 @@ import Users from "./pages/Users";
 import GeneralWorkerReport from "./pages/GeneralWorkerReport";
 import QsDashboard from "./pages/QsDashboard";
 import EngineerDashboard from "./pages/EngineerDashboard";
+import ProjectKpis from "./pages/ProjectKpis";
+import ActivityTimeline from "./pages/ActivityTimeline";
 import QsPayments from "./pages/QsPayments";
 import SiteProgress from "./pages/SiteProgress";
 import QsProcurement from "./pages/QsProcurement";
@@ -509,6 +511,22 @@ export default function App() {
             element={
               <ProtectedRoute roles={["TECHNICAL_MANAGER", "MANAGEMENT"]}>
                 <ManagementDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/dashboard/kpis"
+            element={
+              <ProtectedRoute roles={["TECHNICAL_MANAGER", "MANAGEMENT"]}>
+                <ProjectKpis />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/dashboard/timeline"
+            element={
+              <ProtectedRoute roles={["TECHNICAL_MANAGER", "MANAGEMENT"]}>
+                <ActivityTimeline />
               </ProtectedRoute>
             }
           />
