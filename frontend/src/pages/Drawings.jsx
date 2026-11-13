@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
-import SymbolCounter from "../components/SymbolCounter";
 import { extractPdfText, parseDrawingText, renderPdfToCanvas, imageToCanvas, ocrCanvas } from "../lib/drawingExtract";
 
 function fmtSize(bytes) {
@@ -36,7 +35,6 @@ const confidenceStyle = {
 function DevicePanel({ projectId, drawing, canEdit, onSaved }) {
   const existing = drawing.devices;
   const [open, setOpen] = useState(false);
-  const [cvOpen, setCvOpen] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractMsg, setExtractMsg] = useState("");
   const [saving, setSaving] = useState(false);
@@ -78,7 +76,7 @@ function DevicePanel({ projectId, drawing, canEdit, onSaved }) {
         if (ocrFound.length > found.length) found = ocrFound;
       }
       if (!found.length) {
-        setErr("Couldn't read components from this drawing — even with OCR the symbols are too graphical. Use 🔍 Count symbols or Enter manually.");
+        setErr("Couldn't read components from this drawing — even with OCR the symbols are too graphical. Use Enter manually for this one.");
         return;
       }
       const base = existing
@@ -89,20 +87,6 @@ function DevicePanel({ projectId, drawing, canEdit, onSaved }) {
     } catch (e) {
       setErr(e?.message || "Could not read the drawing.");
     } finally { setExtracting(false); setExtractMsg(""); }
-  }
-
-  // A symbol was counted with OpenCV — open the editor with a new row holding
-  // that count, so the QS names the symbol and saves it into the take-off.
-  function handleCounted(n) {
-    setCvOpen(false);
-    const base = existing
-      ? (existing.items || []).map((o) => ({ name: o.name || "", qty: o.qty ?? o.count ?? "", rating: o.rating ?? "", unit: o.unit || "nr" }))
-      : [];
-    setDraft({
-      summary: existing?.summary || "", items: [...base, { name: "", qty: n, rating: "", unit: "nr" }],
-      confidence: existing?.confidence ?? null, notes: existing?.notes || "", source: "manual",
-    });
-    setOpen(true);
   }
 
   function startManual() {
@@ -170,11 +154,6 @@ function DevicePanel({ projectId, drawing, canEdit, onSaved }) {
               {extracting ? "Reading…" : "📄 Extract take-off"}
             </button>
           )}
-          <button onClick={() => setCvOpen(true)} disabled={!canRead}
-            title={canRead ? "Count a symbol on the drawing (OpenCV)" : "Counting needs a PNG, JPEG, WEBP or PDF"}
-            className="text-xs font-medium rounded-lg px-2.5 py-1.5 border border-slate-300 hover:bg-slate-50">
-            🔍 Count symbols
-          </button>
           <button onClick={startManual} className="text-xs rounded-lg px-2.5 py-1.5 border border-slate-300 hover:bg-slate-50">
             {existing ? "Edit list" : "Enter manually"}
           </button>
@@ -185,12 +164,8 @@ function DevicePanel({ projectId, drawing, canEdit, onSaved }) {
               {sending ? "Sending…" : "📋 Send to BOQ"}
             </button>
           )}
-          {!canRead && <span className="text-[10px] text-slate-400">counts images/PDF only</span>}
+          {!canRead && <span className="text-[10px] text-slate-400">reads PDF/image only</span>}
         </div>
-      )}
-
-      {cvOpen && (
-        <SymbolCounter projectId={projectId} drawing={drawing} onClose={() => setCvOpen(false)} onCounted={handleCounted} />
       )}
 
       {err && <p className="text-xs text-red-600 mt-2">{err}</p>}
@@ -418,7 +393,7 @@ export default function Drawings() {
 
           {canEdit && drawings.length > 0 && (
             <p className="text-[11px] text-slate-400 mt-3">
-              🔍 Count symbols counts copies of one symbol you box on the drawing (OpenCV) — always sanity-check it. Upload a new version any time; the old ones stay traceable.
+              📄 Extract take-off reads the components from the drawing (PDF text, or OCR for scanned ones) — always check the list before you save. Upload a new version any time; the old ones stay traceable.
             </p>
           )}
         </div>
