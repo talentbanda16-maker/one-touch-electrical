@@ -55,6 +55,7 @@ export default function StoresReport() {
   const [hasDraft, setHasDraft] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [bomItems, setBomItems] = useState([]);
+  const [materials, setMaterials] = useState([]);
 
   useEffect(() => {
     api.get("/projects").then((data) => {
@@ -67,6 +68,7 @@ export default function StoresReport() {
     if (!projectId) return;
     api.get(`/reports/stores?projectId=${projectId}`).then(setReports).catch(() => setReports([]));
     api.get(`/procurement?projectId=${projectId}`).then(setBomItems).catch(() => setBomItems([]));
+    api.get(`/projects/${projectId}/materials`).then(setMaterials).catch(() => setMaterials([]));
     loadRequisitions(projectId);
   }, [projectId, success]);
 
@@ -343,6 +345,10 @@ export default function StoresReport() {
 
   return (
     <div className="min-h-screen bg-slate-50">
+      {/* Autocomplete source for all Item fields — materials database */}
+      <datalist id="mat-options">
+        {materials.map((m) => <option key={m.id} value={m.description} />)}
+      </datalist>
       <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">Stores Report</p>
@@ -576,6 +582,7 @@ export default function StoresReport() {
             <div className="grid grid-cols-2 gap-2">
               <input
                 type="text"
+                list="mat-options"
                 placeholder="Item name"
                 required
                 value={newRequisition.itemName}
@@ -705,6 +712,7 @@ function MovementSection({ title, direction, lines, updateLine, addLine, removeL
                   <td className="border border-slate-200 px-1 py-1">
                     <input
                       type="text"
+                      list="mat-options"
                       required
                       placeholder="Item description"
                       value={line.itemName}
@@ -800,6 +808,7 @@ function MovementSection({ title, direction, lines, updateLine, addLine, removeL
             <label className="block text-xs text-slate-500 mb-1">Item name *</label>
             <input
               type="text"
+              list="mat-options"
               required
               value={line.itemName}
               onChange={(e) => updateLine(line, "itemName", e.target.value)}

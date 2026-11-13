@@ -43,6 +43,7 @@ const lineItems = z.array(z.record(z.string(), z.any())).default([]);
 const submitSchema = z.object({
   projectId: z.string().uuid(),
   reportDate: z.string().date(),
+  employeeName: z.string().optional(),
   employeeIdNumber: z.string().optional(),
   department: z.string().optional(),
   position: z.string().optional(),
@@ -81,15 +82,34 @@ const submitSchema = z.object({
   tomorrowPlan: lineItems,
 
   employeeSignatureName: z.string().min(1, "Employee name/signature is required"),
+
+  // J–L — optional. When the Foreman fills these (and signs J), the report is
+  // completed on submit instead of going out for a separate review.
+  targetAchievementPercent: z.number().int().min(0).max(100).optional(),
+  productivityRating: z.enum(PRODUCTIVITY_RATINGS).optional(),
+  delayJustified: z.enum(DELAY_JUSTIFIED).optional(),
+  overtimeRecommendation: z.enum(OVERTIME_RECOMMENDATIONS).optional(),
+  supervisorComments: z.string().optional(),
+  supervisorSignatureName: z.string().optional(),
+  productivityScore: z.number().int().min(0).max(100).optional(),
+  overtimeHoursApproved: z.number().nonnegative().max(24).optional(),
+  overtimeCost: z.number().nonnegative().max(999999999).optional(),
+  managementActions: z.array(z.enum(MANAGEMENT_ACTIONS)).default([]),
 });
 
 const reviewSchema = z.object({
+  // J. Supervisor review
   targetAchievementPercent: z.number().int().min(0).max(100).optional(),
   productivityRating: z.enum(PRODUCTIVITY_RATINGS).optional(),
   delayJustified: z.enum(DELAY_JUSTIFIED).optional(),
   overtimeRecommendation: z.enum(OVERTIME_RECOMMENDATIONS).optional(),
   supervisorComments: z.string().optional(),
   supervisorSignatureName: z.string().min(1, "Supervisor name/signature is required"),
+  // K & L — now filled by the supervisor too (no separate management step).
+  productivityScore: z.number().int().min(0).max(100).optional(),
+  overtimeHoursApproved: z.number().nonnegative().max(24).optional(),
+  overtimeCost: z.number().nonnegative().max(999999999).optional(),
+  managementActions: z.array(z.enum(MANAGEMENT_ACTIONS)).default([]),
 });
 
 const finalizeSchema = z.object({
@@ -114,7 +134,8 @@ const MANAGEMENT_ONLY_FIELDS = [
 ];
 
 function forRole(report, role) {
-  if (role === "TECHNICAL_MANAGER" || role === "MANAGEMENT") return report;
+  // Supervisor (Foreman) now fills K & L, so they see those fields too.
+  if (role === "TECHNICAL_MANAGER" || role === "MANAGEMENT" || role === "FOREMAN") return report;
   const visible = { ...report };
   for (const field of MANAGEMENT_ONLY_FIELDS) delete visible[field];
   return visible;
@@ -127,21 +148,28 @@ const INCLUDE = {
   finalizedBy: { select: { id: true, name: true } },
 };
 
-// Stage 1 — the General Worker fills sections A-I and submits.
-router.post("/", requireAuth, requireRole("GENERAL_WORKER"), requireProjectMember, async (req, res) => {
+// The General Worker fills A-I and submits for review; OR the Foreman (who is
+// responsible and often fills it for the workers) fills A-L and completes it
+// in one go.
+router.post("/", requireAuth, requireRole("GENERAL_WORKER", "FOREMAN"), requireProjectMember, async (req, res) => {
   const parsed = submitSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
   const { projectId, reportDate, ...detail } = parsed.data;
+  // If the supervisor part (J) was signed on submit, the report is complete.
+  const completed = !!detail.supervisorSignatureName;
+  const now = new Date();
 
   const report = await prisma.productivityReport.create({
     data: {
       projectId,
       reportDate: new Date(reportDate),
       submittedById: req.user.id,
-      status: "SUBMITTED",
       ...detail,
+      ...(completed
+        ? { status: "COMPLETED", reviewedById: req.user.id, reviewedAt: now, finalizedById: req.user.id, finalizedAt: now }
+        : { status: "SUBMITTED" }),
     },
     include: INCLUDE,
   });
@@ -151,17 +179,20 @@ router.post("/", requireAuth, requireRole("GENERAL_WORKER"), requireProjectMembe
     action: "PRODUCTIVITY_REPORT_SUBMITTED",
     entityType: "ProductivityReport",
     entityId: report.id,
-    metadata: { projectId },
+    metadata: { projectId, completed },
   });
 
-  await notifyManagers({
-    type: "REPORT_AWAITING_APPROVAL",
-    title: "Daily productivity report awaiting supervisor review",
-    message: `${report.submittedBy.name} submitted a daily productivity report awaiting Foreman review.`,
-    projectId,
-    link: "/productivity/review",
-    dedupeKey: `PRODUCTIVITY_AWAITING_REVIEW:${report.id}`,
-  });
+  // Only notify for review when it still needs one.
+  if (!completed) {
+    await notifyManagers({
+      type: "REPORT_AWAITING_APPROVAL",
+      title: "Daily productivity report awaiting supervisor review",
+      message: `${report.submittedBy.name} submitted a daily productivity report awaiting Foreman review.`,
+      projectId,
+      link: "/productivity/review",
+      dedupeKey: `PRODUCTIVITY_AWAITING_REVIEW:${report.id}`,
+    });
+  }
 
   res.status(201).json(forRole(report, req.user.role));
 });
@@ -203,13 +234,17 @@ router.patch("/:id/supervisor-review", requireAuth, requireRole("FOREMAN"), asyn
     return res.status(400).json({ error: parsed.error.flatten() });
   }
 
+  const now = new Date();
   const updated = await prisma.productivityReport.update({
     where: { id: report.id },
     data: {
       ...parsed.data,
-      status: "SUPERVISOR_REVIEWED",
+      // The supervisor completes the whole review (J + K + L) in one go.
+      status: "COMPLETED",
       reviewedById: req.user.id,
-      reviewedAt: new Date(),
+      reviewedAt: now,
+      finalizedById: req.user.id,
+      finalizedAt: now,
     },
     include: INCLUDE,
   });
@@ -219,15 +254,6 @@ router.patch("/:id/supervisor-review", requireAuth, requireRole("FOREMAN"), asyn
     action: "PRODUCTIVITY_REPORT_SUPERVISOR_REVIEWED",
     entityType: "ProductivityReport",
     entityId: report.id,
-  });
-
-  await notifyManagers({
-    type: "REPORT_AWAITING_APPROVAL",
-    title: "Daily productivity report awaiting management review",
-    message: `${updated.reviewedBy.name} completed the supervisor review — awaiting Technical Manager sign-off.`,
-    projectId: report.projectId,
-    link: "/productivity/finalize",
-    dedupeKey: `PRODUCTIVITY_AWAITING_FINALIZE:${report.id}`,
   });
 
   res.json(forRole(updated, req.user.role));

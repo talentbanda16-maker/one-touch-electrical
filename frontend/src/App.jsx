@@ -39,6 +39,17 @@ import FinancePaymentHistory from "./pages/FinancePaymentHistory";
 import FinanceProcurementSpend from "./pages/FinanceProcurementSpend";
 import Approvals from "./pages/Approvals";
 import Instructions from "./pages/Instructions";
+import SiteBoard from "./pages/SiteBoard";
+import ProjectWorkspace from "./pages/ProjectWorkspace";
+import ForemanReportsHub from "./pages/ForemanReportsHub";
+import ForemanReportsCompile from "./pages/ForemanReportsCompile";
+import MySiteVisits from "./pages/MySiteVisits";
+import TenderBoq from "./pages/TenderBoq";
+import Materials from "./pages/Materials";
+import ContractAgreement from "./pages/ContractAgreement";
+import InterimPaymentClaim from "./pages/InterimPaymentClaim";
+import ProgrammeOfWorks from "./pages/ProgrammeOfWorks";
+import Drawings from "./pages/Drawings";
 import Actions from "./pages/Actions";
 import ProjectAnalytics from "./pages/ProjectAnalytics";
 import ProjectsComparison from "./pages/ProjectsComparison";
@@ -423,6 +434,94 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Instructions />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/board"
+            element={
+              <ProtectedRoute roles={["TECHNICAL_MANAGER", "ENGINEER", "MANAGEMENT"]}>
+                <SiteBoard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/workspace/:projectId"
+            element={
+              <ProtectedRoute roles={["TECHNICAL_MANAGER", "ENGINEER", "MANAGEMENT"]}>
+                <ProjectWorkspace />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/reports/hub"
+            element={
+              <ProtectedRoute roles={["FOREMAN", "TECHNICAL_MANAGER"]}>
+                <ForemanReportsHub />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/reports/compile"
+            element={
+              <ProtectedRoute roles={["TECHNICAL_MANAGER", "MANAGEMENT"]}>
+                <ForemanReportsCompile />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/my-visits"
+            element={
+              <ProtectedRoute>
+                <MySiteVisits />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tender-boq"
+            element={
+              <ProtectedRoute roles={["QS", "TECHNICAL_MANAGER", "ENGINEER", "MANAGEMENT"]}>
+                <TenderBoq />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/materials"
+            element={
+              <ProtectedRoute roles={["QS", "TECHNICAL_MANAGER", "ENGINEER", "MANAGEMENT", "STORESMAN"]}>
+                <Materials />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/contract"
+            element={
+              <ProtectedRoute roles={["QS", "TECHNICAL_MANAGER", "ENGINEER", "MANAGEMENT"]}>
+                <ContractAgreement />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/interim-claim"
+            element={
+              <ProtectedRoute roles={["QS", "TECHNICAL_MANAGER", "ENGINEER", "MANAGEMENT", "FINANCE"]}>
+                <InterimPaymentClaim />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/drawings"
+            element={
+              <ProtectedRoute roles={["QS", "TECHNICAL_MANAGER", "ENGINEER", "MANAGEMENT"]}>
+                <Drawings />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/programme"
+            element={
+              <ProtectedRoute roles={["QS", "TECHNICAL_MANAGER", "ENGINEER", "MANAGEMENT"]}>
+                <ProgrammeOfWorks />
               </ProtectedRoute>
             }
           />

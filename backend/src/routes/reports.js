@@ -77,6 +77,11 @@ const foremanSchema = z.object({
   // Client-generated (e.g. crypto.randomUUID() at draft time) so a
   // retried offline-sync submit is safely idempotent — see Report.submissionId.
   submissionId: z.string().min(1),
+  periodType: z.enum(["DAILY", "WEEKLY"]).optional(),
+  // Full structured 12-section form (weather, personnel/equipment/materials
+  // tables, safety, signatures, etc.). The scalar fields below are still
+  // sent (mapped from it) so analytics keep working.
+  formData: z.any().optional(),
   siteLocation: z.string().optional(),
   // Manpower on site — fixed categories (paper form section 4); the
   // Total Workforce figure is computed server-side from these, not
@@ -96,6 +101,16 @@ const foremanSchema = z.object({
   instructionsReceived: z.string().optional(),
   nextDayPlan: z.string().optional(),
 });
+
+// Prefer the personnel table's headcount when the full form sent it;
+// otherwise fall back to the fixed manpower categories.
+function workersFromForm(detail, formData) {
+  if (formData && Array.isArray(formData.personnel)) {
+    const sum = formData.personnel.reduce((s, p) => s + (Number(p.workers) || 0), 0);
+    if (sum > 0) return sum;
+  }
+  return workforceTotal(detail);
+}
 
 function workforceTotal(detail) {
   return (
@@ -118,7 +133,7 @@ router.post(
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.flatten() });
     }
-    const { projectId, reportDate, submissionId, ...detail } = parsed.data;
+    const { projectId, reportDate, submissionId, periodType, formData, ...detail } = parsed.data;
 
     const existing = await prisma.report.findUnique({
       where: { submissionId },
@@ -136,7 +151,8 @@ router.post(
         reportDate: new Date(reportDate),
         submittedById: req.user.id,
         submissionId,
-        foremanDetail: { create: { ...detail, workersOnSite: workforceTotal(detail) } },
+        periodType: periodType === "WEEKLY" ? "WEEKLY" : "DAILY",
+        foremanDetail: { create: { ...detail, workersOnSite: workersFromForm(detail, formData), formData: formData ?? undefined } },
       },
       include: { foremanDetail: true },
     });
@@ -171,11 +187,24 @@ router.get("/foreman", requireAuth, requireProjectAccess, async (req, res) => {
   if (req.user.role === "FOREMAN") {
     where.submittedById = req.user.id;
   }
+  // Daily vs weekly. Existing reports have periodType null = treat as DAILY.
+  if (req.query.periodType === "WEEKLY") {
+    where.periodType = "WEEKLY";
+  } else if (req.query.periodType === "DAILY") {
+    where.OR = [{ periodType: null }, { periodType: "DAILY" }];
+  }
+  // Date-range filter — lets the TM compile a weekly/monthly report from the
+  // daily reports between two dates.
+  if (req.query.from || req.query.to) {
+    where.reportDate = {};
+    if (req.query.from) where.reportDate.gte = new Date(req.query.from);
+    if (req.query.to) where.reportDate.lte = new Date(req.query.to);
+  }
 
   const reports = await prisma.report.findMany({
     where,
     include: { foremanDetail: true, submittedBy: { select: { id: true, name: true } } },
-    orderBy: { reportDate: "desc" },
+    orderBy: { reportDate: req.query.order === "asc" ? "asc" : "desc" },
   });
   res.json(reports);
 });
@@ -207,7 +236,7 @@ router.patch("/foreman/:id", requireAuth, requireRole("FOREMAN"), async (req, re
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
-  const { reportDate, ...detail } = parsed.data;
+  const { reportDate, periodType, formData, ...detail } = parsed.data;
 
   const updated = await prisma.report.update({
     where: { id: report.id },
@@ -216,7 +245,8 @@ router.patch("/foreman/:id", requireAuth, requireRole("FOREMAN"), async (req, re
       status: "SUBMITTED",
       returnReason: null,
       submittedAt: new Date(),
-      foremanDetail: { update: { ...detail, workersOnSite: workforceTotal(detail) } },
+      ...(periodType ? { periodType: periodType === "WEEKLY" ? "WEEKLY" : "DAILY" } : {}),
+      foremanDetail: { update: { ...detail, workersOnSite: workersFromForm(detail, formData), formData: formData ?? undefined } },
     },
     include: { foremanDetail: true },
   });

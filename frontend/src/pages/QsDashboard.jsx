@@ -1116,6 +1116,13 @@ export default function QsDashboard() {
                     { icon: "📊", label: "Site Progress",    path: `/site-progress${selectedProjectId ? `?projectId=${selectedProjectId}` : ""}` },
                     { icon: "📦", label: "Procurement / Stores", path: `/procurement${selectedProjectId ? `?projectId=${selectedProjectId}` : ""}` },
                     { icon: "💰", label: "Invoice & Expenditure", path: `/invoice-chart${selectedProjectId ? `?projectId=${selectedProjectId}` : ""}` },
+                    { icon: "📐", label: "Tender BOQ", path: `/tender-boq${selectedProjectId ? `?projectId=${selectedProjectId}` : ""}` },
+                    { icon: "🖼️", label: "Drawings", path: `/drawings${selectedProjectId ? `?projectId=${selectedProjectId}` : ""}` },
+                    { icon: "🧱", label: "Materials", path: `/materials${selectedProjectId ? `?projectId=${selectedProjectId}` : ""}` },
+                    { icon: "📜", label: "Contract Agreement", path: `/contract${selectedProjectId ? `?projectId=${selectedProjectId}` : ""}` },
+                    { icon: "🧾", label: "Interim Payment Claim", path: `/interim-claim${selectedProjectId ? `?projectId=${selectedProjectId}` : ""}` },
+                    { icon: "📈", label: "Programme of Works", path: `/programme${selectedProjectId ? `?projectId=${selectedProjectId}` : ""}` },
+                    { icon: "📅", label: "My Site Visits", path: "/my-visits" },
                   ].map(({ icon, label, path }) => (
                     <button key={label} onClick={() => navigate(path)}
                       className="text-white rounded-xl py-4 text-sm font-semibold flex flex-col items-center gap-1.5 transition-all active:scale-95"
@@ -1133,7 +1140,6 @@ export default function QsDashboard() {
               <div className="grid grid-cols-2 gap-3">
                 {[
                   { icon: "🧾", label: "Claims",           idx: 1 },
-                  { icon: "📐", label: "BOQ",              idx: 2 },
                   { icon: "🗓️", label: "Schedule Payment", idx: 3 },
                   { icon: "🏗️", label: "Site Overview",    idx: 4 },
                 ].map(({ icon, label, idx }) => (
@@ -1157,7 +1163,6 @@ export default function QsDashboard() {
                   <h2 className="font-bold text-slate-900 text-base">{TABS[tab]}</h2>
                 </div>
                 {tab === 1 && <ClaimsTab key={selectedProjectId} projectId={selectedProjectId} navigate={navigate} />}
-                {tab === 2 && <BoqTab key={selectedProjectId} projectId={selectedProjectId} projectName={selectedProject?.name ?? ""} />}
                 {tab === 3 && <PaymentsTab key={selectedProjectId} projectId={selectedProjectId} />}
                 {tab === 4 && <SiteOverviewTab key={selectedProjectId} projectId={selectedProjectId} />}
               </div>

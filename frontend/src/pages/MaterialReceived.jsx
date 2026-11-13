@@ -35,6 +35,18 @@ export default function MaterialReceived() {
     };
     load();
   }, [projectId]);
+
+  // Materials database — powers the Description autocomplete.
+  const [materials, setMaterials] = useState([]);
+  useEffect(() => {
+    (async () => {
+      let pid = projectId;
+      if (!pid) { const projects = await api.get("/projects").catch(() => []); pid = projects[0]?.id || ""; }
+      if (!pid) return;
+      setMaterials(await api.get(`/projects/${pid}/materials`).catch(() => []));
+    })();
+  }, [projectId]);
+
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -110,6 +122,11 @@ export default function MaterialReceived() {
         {success && <div className="bg-green-50 border border-green-300 text-green-700 rounded-xl px-4 py-3 text-sm">{success}</div>}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Autocomplete source for the Description fields — materials database */}
+          <datalist id="mat-options">
+            {materials.map((m) => <option key={m.id} value={m.description} />)}
+          </datalist>
+
           {/* Date only */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
             <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
@@ -147,7 +164,7 @@ export default function MaterialReceived() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Description</label>
-                    <input type="text" placeholder="Item description" value={row.itemName} onChange={(e) => updateRow(row.id, "itemName", e.target.value)}
+                    <input type="text" list="mat-options" placeholder="Item description" value={row.itemName} onChange={(e) => updateRow(row.id, "itemName", e.target.value)}
                       className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                   </div>
                   <div>

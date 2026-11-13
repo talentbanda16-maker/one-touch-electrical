@@ -143,6 +143,11 @@ export default function ManagementDashboard() {
                 value="View"
                 onClick={() => navigate("/dashboard/timeline")}
               />
+              <StatTile
+                label="Project Pipeline"
+                value="View"
+                onClick={() => navigate("/board")}
+              />
             </div>
 
             {delegatedActions.length > 0 && (

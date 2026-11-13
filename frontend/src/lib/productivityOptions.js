@@ -46,8 +46,9 @@ export const WORK_TARGET_FIELDS = [
   { key: "unit", label: "Unit" },
   { key: "target", label: "Target", type: "number" },
   { key: "actual", label: "Actual", type: "number" },
-  { key: "startTime", label: "Start time", type: "time" },
-  { key: "endTime", label: "End time", type: "time" },
+  { key: "percentAchieved", label: "% Achieved", type: "number" },
+  { key: "startTime", label: "Start", type: "time" },
+  { key: "endTime", label: "End", type: "time" },
 ];
 export const NOT_COMPLETED_FIELDS = [
   { key: "task", label: "Task" },
@@ -58,7 +59,8 @@ export const DELAY_FIELDS = [
   { key: "time", label: "Time", type: "time" },
   { key: "duration", label: "Duration (hrs)", type: "number" },
   { key: "reason", label: "Reason" },
-  { key: "cause", label: "Who / what caused it" },
+  { key: "cause", label: "Who / what caused delay" },
+  { key: "verified", label: "Verified" },
 ];
 export const MATERIALS_FIELDS = [
   { key: "item", label: "Item" },

@@ -355,7 +355,9 @@ export default function Dashboard() {
             <SectionCard title="Operations">
               <div className="grid grid-cols-2 gap-2">
                 <NavBtn label="Management Dashboard" onClick={() => navigate("/dashboard/management")} wide />
+                <NavBtn label="Project Pipeline"      onClick={() => navigate("/board")} wide />
                 <NavBtn label="Review Reports"        onClick={() => navigate("/approvals")} badge={pendingCount} color={pendingCount > 0 ? "amber" : "blue"} />
+                <NavBtn label="Compile Reports"       onClick={() => navigate("/reports/compile")} wide />
                 <NavBtn label="Instructions"          onClick={() => navigate("/instructions")} />
                 <NavBtn label="Actions"               onClick={() => navigate("/actions")} />
               </div>
@@ -375,6 +377,8 @@ export default function Dashboard() {
             <SectionCard title="Reports & Analytics">
               <div className="grid grid-cols-2 gap-2">
                 <NavBtn label="Project Analytics"     onClick={() => navigate("/analytics")} />
+                <NavBtn label="Project KPIs"          onClick={() => navigate("/dashboard/kpis")} />
+                <NavBtn label="Activity Timeline"     onClick={() => navigate("/dashboard/timeline")} />
                 <NavBtn label="Combined Report"       onClick={() => navigate("/reports/combined")} />
                 <NavBtn label="Reports Centre"        onClick={() => navigate("/reports/generate")} wide />
               </div>
@@ -432,7 +436,8 @@ export default function Dashboard() {
           <div className="space-y-3">
             <ActiveProjectCard projects={allProjects} value={activeProjectId} onChange={saveActiveProject} />
             <div className="grid grid-cols-2 gap-3">
-              <NavBtn label="Submit Daily Report"   onClick={() => navigate("/reports/foreman")} wide />
+              <NavBtn label="Reports"               onClick={() => navigate("/reports/hub")} wide />
+              <NavBtn label="Workers Report"        onClick={() => navigate("/reports/productivity")} wide />
               <NavBtn label="Review Productivity"   onClick={() => navigate("/productivity/review")} wide />
               <NavBtn label="My Instructions"       onClick={() => navigate("/instructions")} />
               <NavBtn label="My Actions"            onClick={() => navigate("/actions")} />

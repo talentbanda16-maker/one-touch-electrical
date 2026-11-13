@@ -5,6 +5,7 @@ const { recordAudit } = require("../audit");
 const { requireAuth } = require("../middleware/auth");
 const { requireRole, requireProjectMember } = require("../middleware/rbac");
 const { generateRefNumber } = require("../lib/refNumbers");
+const { notify } = require("../lib/notifications");
 
 const router = express.Router();
 
@@ -63,6 +64,7 @@ router.post("/", requireAuth, requireProjectMember, async (req, res) => {
     include: {
       assignedTo: { select: { id: true, name: true } },
       project: { select: { id: true, name: true } },
+      createdBy: { select: { id: true, name: true } },
     },
   });
 
@@ -72,6 +74,17 @@ router.post("/", requireAuth, requireProjectMember, async (req, res) => {
     entityType: "Action",
     entityId: action.id,
     metadata: { projectId, assignedToId, sourceReportId },
+  });
+
+  // Notify the TM that a new action has been raised to them
+  await notify({
+    userId: assignedToId,
+    type: "ACTION_CREATED",
+    title: "New action raised",
+    message: `${action.createdBy.name} raised an action on ${action.project.name}: "${description}"`,
+    projectId,
+    link: "/actions",
+    dedupeKey: `ACTION_CREATED:${action.id}`,
   });
 
   res.status(201).json(action);
@@ -165,6 +178,17 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
     entityType: "Action",
     entityId: action.id,
     metadata: { status: parsed.data.status },
+  });
+
+  // Notify the person who raised the action that the TM updated it
+  await notify({
+    userId: action.createdById,
+    type: "ACTION_UPDATED",
+    title: `Action updated to ${parsed.data.status.replace("_", " ")}`,
+    message: `"${action.description}" has been marked as ${parsed.data.status.replace("_", " ").toLowerCase()} by the Technical Manager.`,
+    projectId: action.projectId,
+    link: "/actions",
+    dedupeKey: `ACTION_STATUS_UPDATED:${action.id}:${parsed.data.status}`,
   });
 
   res.json(updated);

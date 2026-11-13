@@ -24,8 +24,6 @@ function timeAgo(dateStr) {
   return new Date(dateStr).toLocaleDateString();
 }
 
-// entityType: "MaterialRequisition" | "Action" | "Instruction"
-// entityId: UUID
 export default function CommentThread({ entityType, entityId }) {
   const { user } = useAuth();
   const [comments, setComments] = useState([]);
@@ -37,7 +35,10 @@ export default function CommentThread({ entityType, entityId }) {
   useEffect(() => {
     if (!entityId) return;
     api.get(`/comments/${entityType}/${entityId}`)
-      .then(setComments)
+      .then((data) => {
+        setComments(data);
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "instant" }), 50);
+      })
       .catch(() => {});
   }, [entityType, entityId]);
 
@@ -68,61 +69,64 @@ export default function CommentThread({ entityType, entityId }) {
   }
 
   return (
-    <div className="border-t border-slate-100 pt-4 mt-4">
-      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-        Comments {comments.length > 0 && <span className="text-slate-400">({comments.length})</span>}
-      </p>
-
-      {comments.length === 0 && (
-        <p className="text-sm text-slate-400 mb-3">No comments yet. Be the first.</p>
-      )}
-
-      <ul className="space-y-2 mb-3">
-        {comments.map((c) => (
-          <li key={c.id} className="flex gap-2 items-start">
-            <div className="w-7 h-7 rounded-full bg-brand-100 text-brand-800 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
-              {c.author.name.charAt(0).toUpperCase()}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-baseline gap-1.5 flex-wrap">
-                <span className="text-xs font-semibold text-slate-800">{c.author.name}</span>
-                <span className="text-xs text-slate-400">{ROLE_LABELS[c.author.role] || c.author.role}</span>
-                <span className="text-xs text-slate-300">·</span>
-                <span className="text-xs text-slate-400">{timeAgo(c.createdAt)}</span>
-                {(c.authorId === user?.id || user?.role === "TECHNICAL_MANAGER") && (
-                  <button
-                    onClick={() => deleteComment(c.id)}
-                    className="text-xs text-red-400 hover:text-red-600 ml-auto"
-                    aria-label="Delete comment"
-                  >
-                    Delete
-                  </button>
-                )}
+    <div className="border-t border-slate-100 mt-4">
+      {/* Chat window */}
+      <div className="bg-[#ece5dd] rounded-xl p-3 flex flex-col gap-1 max-h-80 overflow-y-auto mt-3">
+        {comments.length === 0 && (
+          <p className="text-xs text-slate-500 text-center py-4">No messages yet.</p>
+        )}
+        {comments.map((c) => {
+          const isMe = c.author.id === user?.id;
+          return (
+            <div key={c.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+              {/* Sender name (only for others) */}
+              {!isMe && (
+                <span className="text-[10px] font-semibold text-teal-700 px-2 mb-0.5">
+                  {c.author.name} · {ROLE_LABELS[c.author.role] || c.author.role}
+                </span>
+              )}
+              <div className={`relative max-w-[75%] px-3 py-2 rounded-xl text-sm shadow-sm ${
+                isMe
+                  ? "bg-[#dcf8c6] text-slate-800 rounded-tr-none"
+                  : "bg-white text-slate-800 rounded-tl-none"
+              }`}>
+                <p className="break-words leading-snug">{c.body}</p>
+                <div className={`flex items-center gap-1 mt-1 ${isMe ? "justify-end" : "justify-start"}`}>
+                  <span className="text-[10px] text-slate-400">{timeAgo(c.createdAt)}</span>
+                  {!c.synthetic && (c.author.id === user?.id || user?.role === "TECHNICAL_MANAGER") && (
+                    <button
+                      onClick={() => deleteComment(c.id)}
+                      className="text-[10px] text-red-400 hover:text-red-600 ml-1"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
               </div>
-              <p className="text-sm text-slate-700 mt-0.5 break-words">{c.body}</p>
             </div>
-          </li>
-        ))}
+          );
+        })}
         <div ref={bottomRef} />
-      </ul>
+      </div>
 
-      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+      {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
 
-      <form onSubmit={submit} className="flex gap-2">
+      {/* Input bar */}
+      <form onSubmit={submit} className="flex gap-2 mt-2">
         <input
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="Add a comment…"
-          className="flex-1 min-w-0 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+          placeholder="Type a message…"
+          className="flex-1 min-w-0 border border-slate-300 rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
           disabled={submitting}
           maxLength={2000}
         />
         <button
           type="submit"
           disabled={submitting || !body.trim()}
-          className="bg-brand-600 text-white rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 shrink-0"
+          className="bg-[#25d366] text-white rounded-full w-9 h-9 flex items-center justify-center disabled:opacity-50 shrink-0 text-base"
         >
-          {submitting ? "…" : "Post"}
+          ➤
         </button>
       </form>
     </div>

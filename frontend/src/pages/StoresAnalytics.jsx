@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
@@ -26,15 +26,16 @@ const URGENCY_COLORS = {
 export default function StoresAnalytics() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [projects, setProjects] = useState([]);
-  const [projectId, setProjectId] = useState("");
+  const [projectId, setProjectId] = useState(searchParams.get("projectId") || "");
   const [data, setData] = useState(null);
   const [requisitions, setRequisitions] = useState([]);
   const [error, setError] = useState("");
   const isTM = user?.role === "TECHNICAL_MANAGER";
 
   // Filters
-  const [statusFilter, setStatusFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState(searchParams.get("status") || "");
   const [urgencyFilter, setUrgencyFilter] = useState("");
   const [search, setSearch] = useState("");
   const [fromDate, setFromDate] = useState("");
@@ -42,7 +43,6 @@ export default function StoresAnalytics() {
 
   // Bulk actions
   const [selected, setSelected] = useState(new Set());
-  const [commentsOpen, setCommentsOpen] = useState({});
   const [bulkLoading, setBulkLoading] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [showRejectInput, setShowRejectInput] = useState(false);
@@ -54,7 +54,33 @@ export default function StoresAnalytics() {
     });
   }, []);
 
-  const loadRequisitions = useCallback(() => {
+  // Single effect owns all filter state — no stale closure risk.
+  // Debounce only when search is the thing that changed; all other filter
+  // changes (dropdowns, date pickers) fire immediately.
+  useEffect(() => {
+    if (!projectId) return;
+    setSelected(new Set());
+    const doLoad = () => {
+      const params = new URLSearchParams();
+      if (statusFilter) params.set("status", statusFilter);
+      if (urgencyFilter) params.set("urgency", urgencyFilter);
+      if (search) params.set("search", search);
+      if (fromDate) params.set("from", fromDate);
+      if (toDate) params.set("to", toDate);
+      api.get(`/projects/${projectId}/requisitions?${params}`).then(setRequisitions).catch(() => setRequisitions([]));
+    };
+    const delay = search ? 300 : 0;
+    const t = setTimeout(doLoad, delay);
+    return () => clearTimeout(t);
+  }, [projectId, statusFilter, urgencyFilter, search, fromDate, toDate]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    setError("");
+    api.get(`/projects/${projectId}/stores-analytics`).then(setData).catch((err) => setError(err.message || "Failed to load"));
+  }, [projectId]);
+
+  function loadRequisitions() {
     if (!projectId) return;
     const params = new URLSearchParams();
     if (statusFilter) params.set("status", statusFilter);
@@ -63,26 +89,7 @@ export default function StoresAnalytics() {
     if (fromDate) params.set("from", fromDate);
     if (toDate) params.set("to", toDate);
     api.get(`/projects/${projectId}/requisitions?${params}`).then(setRequisitions).catch(() => setRequisitions([]));
-  }, [projectId, statusFilter, urgencyFilter, search, fromDate, toDate]);
-
-  useEffect(() => {
-    if (!projectId) return;
-    setError("");
-    setSelected(new Set());
-    api.get(`/projects/${projectId}/stores-analytics`).then(setData).catch((err) => setError(err.message || "Failed to load"));
-    loadRequisitions();
-  }, [projectId]);
-
-  useEffect(() => {
-    setSelected(new Set());
-    loadRequisitions();
-  }, [statusFilter, urgencyFilter, fromDate, toDate]);
-
-  // Debounce search
-  useEffect(() => {
-    const t = setTimeout(loadRequisitions, 300);
-    return () => clearTimeout(t);
-  }, [search]);
+  }
 
   async function handleApproveReq(id, approved, reason) {
     try {
@@ -236,14 +243,7 @@ export default function StoresAnalytics() {
                     </p>
                     {r.notes && <p className="text-xs text-slate-500 mt-0.5 italic">"{r.notes}"</p>}
                     {r.rejectionReason && <p className="text-xs text-red-600 mt-1 bg-red-50 border border-red-100 rounded px-2 py-1">Reason: {r.rejectionReason}</p>}
-                    <button
-                      type="button"
-                      onClick={() => setCommentsOpen((prev) => ({ ...prev, [r.id]: !prev[r.id] }))}
-                      className="text-xs text-blue-600 hover:underline mt-1"
-                    >
-                      {commentsOpen[r.id] ? "Hide comments" : "Comments"}
-                    </button>
-                    {commentsOpen[r.id] && <CommentThread entityType="MaterialRequisition" entityId={r.id} />}
+                    <CommentThread entityType="MaterialRequisition" entityId={r.id} />
                   </div>
                   {isTM && r.status === "PENDING" && (
                     <div className="flex gap-2 shrink-0">

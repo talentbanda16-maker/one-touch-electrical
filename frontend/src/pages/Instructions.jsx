@@ -20,7 +20,6 @@ export default function Instructions() {
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [attachmentsByInstruction, setAttachmentsByInstruction] = useState({});
-  const [commentsOpen, setCommentsOpen] = useState({});
 
   const [form, setForm] = useState({
     projectId: "",
@@ -318,14 +317,7 @@ export default function Instructions() {
                 </div>
 
                 <div className="pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setCommentsOpen((prev) => ({ ...prev, [i.id]: !prev[i.id] }))}
-                    className="text-xs text-blue-600 hover:underline"
-                  >
-                    {commentsOpen[i.id] ? "Hide comments" : "Comments"}
-                  </button>
-                  {commentsOpen[i.id] && <CommentThread entityType="Instruction" entityId={i.id} />}
+                  <CommentThread entityType="Instruction" entityId={i.id} />
                 </div>
 
                 <div className="pt-2 border-t border-slate-100 space-y-1">

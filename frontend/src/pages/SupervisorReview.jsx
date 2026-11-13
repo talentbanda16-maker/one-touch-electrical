@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
-import { PRODUCTIVITY_RATINGS, DELAY_JUSTIFIED, OVERTIME_RECOMMENDATIONS } from "../lib/productivityOptions";
+import { PRODUCTIVITY_RATINGS, DELAY_JUSTIFIED, OVERTIME_RECOMMENDATIONS, MANAGEMENT_ACTIONS } from "../lib/productivityOptions";
 import ProductivityReportDocument from "../components/ProductivityReportDocument";
 
 const STATUS_LABELS = { SUBMITTED: "Awaiting your review", SUPERVISOR_REVIEWED: "Sent to Technical Manager", COMPLETED: "Completed" };
@@ -13,9 +13,10 @@ export default function SupervisorReview() {
   const [pending, setPending] = useState([]);
   const [reviewed, setReviewed] = useState([]);
   const [expandedId, setExpandedId] = useState(null);
-  const [form, setForm] = useState({ targetAchievementPercent: "", productivityRating: "", delayJustified: "", overtimeRecommendation: "", supervisorComments: "", supervisorSignatureName: "" });
+  const [form, setForm] = useState({ targetAchievementPercent: "", productivityRating: "", delayJustified: "", overtimeRecommendation: "", supervisorComments: "", supervisorSignatureName: "", productivityScore: "", overtimeHoursApproved: "", overtimeCost: "", managementActions: [] });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [signing, setSigning] = useState(false);
 
   useEffect(() => {
     load();
@@ -32,7 +33,7 @@ export default function SupervisorReview() {
       return;
     }
     setExpandedId(report.id);
-    setForm({ targetAchievementPercent: "", productivityRating: "", delayJustified: "", overtimeRecommendation: "", supervisorComments: "", supervisorSignatureName: "" });
+    setForm({ targetAchievementPercent: "", productivityRating: "", delayJustified: "", overtimeRecommendation: "", supervisorComments: "", supervisorSignatureName: "", productivityScore: "", overtimeHoursApproved: "", overtimeCost: "", managementActions: [] });
     setError("");
   }
 
@@ -47,6 +48,10 @@ export default function SupervisorReview() {
         overtimeRecommendation: form.overtimeRecommendation || undefined,
         supervisorComments: form.supervisorComments || undefined,
         supervisorSignatureName: form.supervisorSignatureName,
+        productivityScore: form.productivityScore ? Number(form.productivityScore) : undefined,
+        overtimeHoursApproved: form.overtimeHoursApproved ? Number(form.overtimeHoursApproved) : undefined,
+        overtimeCost: form.overtimeCost ? Number(form.overtimeCost) : undefined,
+        managementActions: form.managementActions,
       });
       setExpandedId(null);
       load();
@@ -59,6 +64,7 @@ export default function SupervisorReview() {
 
   return (
     <div className="min-h-screen bg-slate-50">
+      {signing && <SignaturePad onSave={(sig) => { setForm((f) => ({ ...f, supervisorSignatureName: sig })); setSigning(false); }} onClose={() => setSigning(false)} />}
       <header className="bg-brand-900 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
         <div>
           <p className="text-sm text-slate-500">Supervisor Review</p>
@@ -116,14 +122,57 @@ export default function SupervisorReview() {
                           </select>
                         </div>
                         <SelectField label="Comments" value={form.supervisorComments} onChange={(v) => setForm((f) => ({ ...f, supervisorComments: v }))} textarea />
-                        <SelectField label="Supervisor name (signature) *" value={form.supervisorSignatureName} onChange={(v) => setForm((f) => ({ ...f, supervisorSignatureName: v }))} />
+                        <div>
+                          <label className="text-xs text-slate-500 block mb-1">Supervisor signature *</label>
+                          {form.supervisorSignatureName && form.supervisorSignatureName.startsWith("data:") ? (
+                            <div className="flex items-center gap-2">
+                              <button type="button" onClick={() => setSigning(true)} className="flex-1 h-16 border border-slate-200 rounded-lg flex items-center justify-center bg-slate-50">
+                                <img src={form.supervisorSignatureName} alt="signature" className="max-h-12 object-contain" />
+                              </button>
+                              <button type="button" onClick={() => setForm((f) => ({ ...f, supervisorSignatureName: "" }))} className="text-xs text-red-400 hover:text-red-600">Clear</button>
+                            </div>
+                          ) : (
+                            <button type="button" onClick={() => setSigning(true)} className="w-full h-16 border-2 border-dashed border-slate-300 rounded-lg text-sm text-slate-400 hover:border-blue-400 hover:text-blue-500">
+                              ✍️ Tap to sign
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="border-t border-slate-200 pt-2 mt-1">
+                          <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">K. Daily productivity control</h4>
+                          <SelectField label="Productivity score (/100)" type="number" value={form.productivityScore} onChange={(v) => setForm((f) => ({ ...f, productivityScore: v }))} />
+                          <SelectField label="Overtime hours approved" type="number" value={form.overtimeHoursApproved} onChange={(v) => setForm((f) => ({ ...f, overtimeHoursApproved: v }))} />
+                          <SelectField label="Overtime cost ($)" type="number" value={form.overtimeCost} onChange={(v) => setForm((f) => ({ ...f, overtimeCost: v }))} />
+                        </div>
+
+                        <div className="border-t border-slate-200 pt-2">
+                          <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">L. Management action / follow-up</h4>
+                          <div className="space-y-1">
+                            {MANAGEMENT_ACTIONS.map((a) => (
+                              <label key={a.value} className="flex items-center gap-2 text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={form.managementActions.includes(a.value)}
+                                  onChange={() => setForm((f) => ({
+                                    ...f,
+                                    managementActions: f.managementActions.includes(a.value)
+                                      ? f.managementActions.filter((x) => x !== a.value)
+                                      : [...f.managementActions, a.value],
+                                  }))}
+                                />
+                                {a.label}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+
                         <button
                           type="button"
                           disabled={busy || !form.supervisorSignatureName}
                           onClick={() => submitReview(r.id)}
                           className="w-full bg-blue-600 text-white rounded-md py-2 text-sm font-medium disabled:opacity-60"
                         >
-                          Submit review — send to Technical Manager
+                          Complete review (J, K &amp; L)
                         </button>
                       </div>
                     </div>
@@ -152,6 +201,46 @@ export default function SupervisorReview() {
           </ul>
         </div>
       </main>
+    </div>
+  );
+}
+
+function SignaturePad({ onSave, onClose }) {
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "#1e293b"; ctx.lineWidth = 2; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  }, []);
+
+  function getPos(e, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const src = e.touches ? e.touches[0] : e;
+    return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+  }
+  function start(e) { e.preventDefault(); drawing.current = true; const c = canvasRef.current; const ctx = c.getContext("2d"); const p = getPos(e, c); ctx.beginPath(); ctx.moveTo(p.x, p.y); }
+  function move(e) { e.preventDefault(); if (!drawing.current) return; const c = canvasRef.current; const ctx = c.getContext("2d"); const p = getPos(e, c); ctx.lineTo(p.x, p.y); ctx.stroke(); }
+  function end(e) { e.preventDefault(); drawing.current = false; }
+  function clear() { const c = canvasRef.current; const ctx = c.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height); }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5 space-y-3">
+        <p className="text-sm font-bold text-slate-800">Sign here</p>
+        <canvas ref={canvasRef} width={340} height={140}
+          className="w-full border-2 border-slate-300 rounded-xl touch-none cursor-crosshair" style={{ background: "#fff" }}
+          onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+          onTouchStart={start} onTouchMove={move} onTouchEnd={end} />
+        <div className="flex gap-2">
+          <button onClick={clear} className="flex-1 border border-slate-300 text-slate-600 font-semibold py-2.5 rounded-xl text-sm">Clear</button>
+          <button onClick={onClose} className="flex-1 border border-slate-300 text-slate-600 font-semibold py-2.5 rounded-xl text-sm">Cancel</button>
+          <button onClick={() => onSave(canvasRef.current.toDataURL("image/png"))} className="flex-1 bg-blue-600 text-white font-bold py-2.5 rounded-xl text-sm">Done</button>
+        </div>
+      </div>
     </div>
   );
 }

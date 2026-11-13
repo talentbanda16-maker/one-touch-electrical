@@ -60,12 +60,20 @@ async function computeProjectAnalytics(project) {
   });
   const foremanProgress = latestForeman?.foremanDetail?.percentProgress ?? null;
 
-  // QS's overall % completion (average across its latest-reported BOQ
-  // items) is the other approved-report source of "actual progress" —
-  // blended 50/50 with Foreman when both exist, since neither alone is
-  // the full physical-progress picture.
-  const qsAnalytics = await computeQsAnalytics(project);
-  const qsProgress = qsAnalytics.totals.overallPercentCompletion;
+  // Physical progress from the Site Progress matrix (the Foreman's
+  // per-BOQ-item entries). This is the primary source because it
+  // reflects real on-site completion per work item. QS report %
+  // is only used as a fallback when no progress cells exist for
+  // the project (e.g. before the BOQ has been set up).
+  const cells = await prisma.progressCell.findMany({ where: { projectId: project.id } });
+  let qsProgress = null;
+  if (cells.length > 0) {
+    const vals = cells.map((c) => parseFloat(c.value) || 0);
+    qsProgress = Math.round(vals.reduce((s, v) => s + v, 0) / vals.length);
+  } else {
+    const qsAnalytics = await computeQsAnalytics(project);
+    qsProgress = qsAnalytics.totals.overallPercentCompletion;
+  }
 
   let actualProgress;
   if (foremanProgress != null && qsProgress != null) {

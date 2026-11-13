@@ -157,8 +157,8 @@ router.get("/kpis", requireAuth, requireRole("MANAGEMENT"), async (_req, res) =>
 
     return {
       id: p.id, name: p.name, code: p.code, status: p.status,
-      completion: analytics.progress?.actualProgress ?? 0,
-      plannedProgress: analytics.progress?.plannedProgress ?? null,
+      completion: analytics.progress?.actual ?? 0,
+      plannedProgress: analytics.progress?.planned ?? null,
       budgetCost, actualCost,
       variance: actualCost - budgetCost,
       daysOnSite, daysRemaining, totalDays,

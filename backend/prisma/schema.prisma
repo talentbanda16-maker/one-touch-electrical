@@ -29,6 +29,11 @@ enum ProjectStatus {
   CLOSED
 }
 
+enum SiteVisitType {
+  SITE_VISIT
+  TESTING
+}
+
 enum ReportType {
   FOREMAN
   QS
@@ -92,6 +97,8 @@ model User {
   productivityReportsReviewed  ProductivityReport[] @relation("ProductivityReportReviewer")
   productivityReportsFinalized ProductivityReport[] @relation("ProductivityReportFinalizer")
   comments                     Comment[]            @relation("CommentAuthor")
+  siteVisitsAssigned           SiteVisit[]          @relation("SiteVisitAssignee")
+  siteVisitsCreated            SiteVisit[]          @relation("SiteVisitCreatedBy")
 
   @@map("users")
 }
@@ -132,6 +139,10 @@ model Project {
   notifications Notification[]
   reportDrafts  ReportDraft[]
   productivityReports ProductivityReport[]
+  siteVisits    SiteVisit[]
+  tenderBoqItems TenderBoqItem[]
+  materials      Material[]
+  programmeActivities ProgrammeActivity[]
   qsPayments  QsPayment[]
   boqItems       ProjectBoqItem[]
   progressCells  ProgressCell[]
@@ -313,6 +324,9 @@ model Report {
   reviewedById  String?
   reviewedAt    DateTime?
   returnReason  String?
+  // For FOREMAN reports: "DAILY" (default) or "WEEKLY" — the same form
+  // submitted for a day or a week. Null is treated as DAILY.
+  periodType    String?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
@@ -370,6 +384,7 @@ model Attachment {
   mimeType      String
   fileSize      Int
   uploadedById  String
+  category      String?
   createdAt     DateTime @default(now())
 
   report      Report?      @relation(fields: [reportId], references: [id], onDelete: Cascade)
@@ -404,6 +419,11 @@ model ForemanReportDetail {
   constraints          String?
   instructionsReceived String?
   nextDayPlan          String?
+  // Full structured form (the 12-section paper Daily Report): weather,
+  // personnel/equipment/materials tables, safety, inspections, signatures,
+  // etc. The scalar columns above are still filled (mapped from this) so
+  // KPIs/analytics keep working.
+  formData             Json?
 
   report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
 
@@ -698,6 +718,7 @@ model ProductivityReport {
   updatedAt     DateTime                 @updatedAt
 
   // Header (worker-filled)
+  employeeName     String?
   employeeIdNumber String?
   department       String?
   position         String?
@@ -805,6 +826,7 @@ model Instruction {
   dueDate            DateTime       @db.Date
   verifiedById       String?
   verifiedAt         DateTime?
+  sourceActionId     String?
   isArchived         Boolean        @default(false)
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
@@ -849,6 +871,94 @@ model Action {
   @@map("actions")
 }
 
+// Tender BOQ line: the QS uploads the client's (unpriced) Bill of Quantities,
+// then fills in rates to turn it into the priced tender submission. Structure
+// (bills, headings, items, quantities) comes from the uploaded file; the QS
+// only adds `rate`. `isHeading` rows are section titles with no price.
+model TenderBoqItem {
+  id          String   @id @default(uuid())
+  projectId   String
+  order       Int
+  bill        String?
+  isHeading   Boolean  @default(false)
+  itemNumber  String?
+  description String
+  unit        String?
+  quantity    Decimal? @db.Decimal(16, 3)
+  rate        Decimal? @db.Decimal(16, 2)
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, order])
+  @@map("tender_boq_items")
+}
+
+// Materials extracted from the tender BOQ — only the supply items (the things
+// to actually buy), pulled out of the BOQ's mixed supply/labour/service lines.
+model Material {
+  id          String   @id @default(uuid())
+  projectId   String
+  bill        String?
+  itemNumber  String?
+  description String
+  unit        String?
+  quantity    Decimal? @db.Decimal(16, 3)
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("materials")
+}
+
+// Structured programme of works — activities as data (not just an uploaded
+// file), so a Working programme can be generated from the Contract one.
+// type: "CONTRACT" (baseline) or "WORKING" (live, with actuals/progress).
+model ProgrammeActivity {
+  id               String   @id @default(uuid())
+  projectId        String
+  type             String
+  order            Int
+  name             String
+  durationWeeks    Int?
+  startWeek        Int?
+  finishWeek       Int?
+  notes            String?
+  // Working-only progress tracking
+  actualStartWeek  Int?
+  actualFinishWeek Int?
+  percentComplete  Int?     @default(0)
+  status           String?
+  createdAt        DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, type, order])
+  @@map("programme_activities")
+}
+
+// Scheduled site visits and testing dates, booked on the project workspace
+// calendar by the Technical Manager or Engineer.
+model SiteVisit {
+  id           String        @id @default(uuid())
+  projectId    String
+  date         DateTime      @db.Date
+  type         SiteVisitType @default(SITE_VISIT)
+  title        String
+  notes        String?
+  assignedToId String?
+  createdById  String
+  createdAt    DateTime      @default(now())
+
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignedTo User?   @relation("SiteVisitAssignee", fields: [assignedToId], references: [id])
+  createdBy  User    @relation("SiteVisitCreatedBy", fields: [createdById], references: [id])
+
+  @@index([projectId, date])
+  @@map("site_visits")
+}
+
 // ---------- Notifications (spec Section 18) ----------
 
 enum NotificationType {
@@ -857,8 +967,17 @@ enum NotificationType {
   REPORT_AWAITING_APPROVAL
   ACTION_DUE_SOON
   ACTION_OVERDUE
+  ACTION_CREATED
+  ACTION_UPDATED
+  COMMENT_ADDED
   MATERIAL_SHORTAGE
   REQUISITION_SUBMITTED
+  REQUISITION_APPROVED
+  REQUISITION_REJECTED
+  REQUISITION_FULFILLED
+  INSTRUCTION_ISSUED
+  INSTRUCTION_UPDATED
+  SITE_VISIT_SCHEDULED
   SAFETY_INCIDENT
   PROGRESS_BEHIND_PLAN
   FUND_UTILISATION_THRESHOLD

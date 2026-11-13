@@ -26,7 +26,7 @@ export default function Actions() {
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [attachmentsByAction, setAttachmentsByAction] = useState({});
-  const [commentsOpen, setCommentsOpen] = useState({});
+  const [filterProjectId, setFilterProjectId] = useState(sourceProjectId);
 
   const [form, setForm] = useState({
     projectId: sourceProjectId,
@@ -46,7 +46,7 @@ export default function Actions() {
       api.get("/users/technical-managers").then(setTechnicalManagers).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [filterProjectId]);
 
   // For a non-TM raiser with exactly one Technical Manager in the
   // system (the common case), skip the picker entirely and just assign
@@ -59,8 +59,10 @@ export default function Actions() {
   }, [technicalManagers]);
 
   function loadActions() {
+    const params = new URLSearchParams();
+    if (filterProjectId) params.set("projectId", filterProjectId);
     api
-      .get("/actions")
+      .get(`/actions${params.toString() ? "?" + params : ""}`)
       .then((list) => {
         setActions(list);
         list.forEach((a) => loadAttachments(a.id));
@@ -291,9 +293,21 @@ export default function Actions() {
         )}
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <h2 className="font-medium text-slate-900 mb-3">
-            {isManager ? "All actions" : isManagement ? "Actions raised to the Technical Manager" : "Actions I've raised"}
-          </h2>
+          <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+            <h2 className="font-medium text-slate-900">
+              {isManager ? "All actions" : isManagement ? "Actions raised to the Technical Manager" : "Actions I've raised"}
+            </h2>
+            <select
+              value={filterProjectId}
+              onChange={(e) => setFilterProjectId(e.target.value)}
+              className="text-sm border border-slate-200 rounded-md px-2 py-1.5 text-slate-700"
+            >
+              <option value="">All projects</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
           {actions.length === 0 && <p className="text-sm text-slate-500">Nothing here.</p>}
           <ul className="space-y-2">
             {actions.map((a) => (
@@ -357,14 +371,7 @@ export default function Actions() {
                 </div>
 
                 <div className="pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setCommentsOpen((prev) => ({ ...prev, [a.id]: !prev[a.id] }))}
-                    className="text-xs text-blue-600 hover:underline"
-                  >
-                    {commentsOpen[a.id] ? "Hide comments" : "Comments"}
-                  </button>
-                  {commentsOpen[a.id] && <CommentThread entityType="Action" entityId={a.id} />}
+                  <CommentThread entityType="Action" entityId={a.id} />
                 </div>
 
                 <div className="pt-2 border-t border-slate-100 space-y-1">

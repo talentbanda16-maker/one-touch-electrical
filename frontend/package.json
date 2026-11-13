@@ -12,11 +12,16 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@techstark/opencv-js": "^5.0.0-release.1",
+    "docx-preview": "^0.4.1",
+    "mammoth": "^1.13.0",
+    "pdfjs-dist": "^6.5.438",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
     "recharts": "^3.10.1",
     "tailwindcss": "^4.3.3",
+    "tesseract.js": "^7.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

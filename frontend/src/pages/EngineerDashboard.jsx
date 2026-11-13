@@ -258,6 +258,8 @@ export default function EngineerDashboard() {
           <div className="grid grid-cols-2 gap-2">
             <NavBtn label="Management Dashboard" onClick={() => navigate("/dashboard/management")} wide />
             <NavBtn label="Review Reports"        onClick={() => navigate("/approvals")} badge={pendingCount} accent={pendingCount > 0} />
+            <NavBtn label="Project Pipeline"      onClick={() => navigate("/board")} wide />
+            <NavBtn label="My Site Visits"        onClick={() => navigate("/my-visits")} wide />
             <NavBtn label="Instructions"          onClick={() => navigate("/instructions")} />
             <NavBtn label="Actions"               onClick={() => navigate("/actions")} />
           </div>

@@ -4,7 +4,7 @@ const prisma = require("../prisma");
 const { recordAudit } = require("../audit");
 const { requireAuth } = require("../middleware/auth");
 const { requireProjectAccess, requireProjectMember } = require("../middleware/rbac");
-const { notifyManagers } = require("../lib/notifications");
+const { notify, notifyManagers } = require("../lib/notifications");
 const { generateRefNumber } = require("../lib/refNumbers");
 
 const router = express.Router();
@@ -140,6 +140,19 @@ router.patch("/requisitions/:id/status", requireAuth, async (req, res) => {
     metadata: { status: parsed.data.status },
   });
 
+  // Notify the person who submitted the requisition
+  await notify({
+    userId: requisition.requestedById,
+    type: "REQUISITION_FULFILLED",
+    title: parsed.data.status === "FULFILLED" ? "Requisition fulfilled" : "Requisition cancelled",
+    message: parsed.data.status === "FULFILLED"
+      ? `Your request for "${requisition.itemName}" has been fulfilled by ${req.user.name}.`
+      : `Your request for "${requisition.itemName}" was cancelled.`,
+    projectId: requisition.projectId,
+    link: "/analytics/stores",
+    dedupeKey: `REQUISITION_RESOLVED:${requisition.id}`,
+  });
+
   res.json(updated);
 });
 
@@ -193,6 +206,19 @@ router.patch("/requisitions/:id/approve", requireAuth, async (req, res) => {
     entityType: "MaterialRequisition",
     entityId: requisition.id,
     metadata: { reason: parsed.data.rejectionReason },
+  });
+
+  // Notify the person who submitted the requisition
+  await notify({
+    userId: requisition.requestedById,
+    type: parsed.data.approved ? "REQUISITION_APPROVED" : "REQUISITION_REJECTED",
+    title: parsed.data.approved ? "Requisition approved" : "Requisition rejected",
+    message: parsed.data.approved
+      ? `Your request for "${requisition.itemName}" has been approved.`
+      : `Your request for "${requisition.itemName}" was rejected${parsed.data.rejectionReason ? `: ${parsed.data.rejectionReason}` : "."}`,
+    projectId: requisition.projectId,
+    link: "/analytics/stores",
+    dedupeKey: `REQUISITION_${parsed.data.approved ? "APPROVED" : "REJECTED"}:${requisition.id}`,
   });
 
   res.json(updated);

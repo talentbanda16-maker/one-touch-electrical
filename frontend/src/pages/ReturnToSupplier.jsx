@@ -23,8 +23,23 @@ export default function ReturnToSupplier() {
   const [submissionId] = useState(() => crypto.randomUUID());
 
 
+  // Materials database — powers the Item autocomplete.
+  const [materials, setMaterials] = useState([]);
+  useEffect(() => {
+    if (!projectId) return;
+    api.get(`/projects/${projectId}/materials`).then(setMaterials).catch(() => {});
+  }, [projectId]);
+
   function updateRow(id, field, val) {
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: val } : r)));
+  }
+
+  function onItemChange(id, val) {
+    setRows((rs) => rs.map((r) => {
+      if (r.id !== id) return r;
+      const m = materials.find((x) => x.description === val);
+      return { ...r, itemName: val, quantity: m && m.quantity != null ? String(m.quantity) : r.quantity };
+    }));
   }
   function addRow() { setRows((rs) => [...rs, newRow()]); }
   function removeRow(id) { setRows((rs) => rs.filter((r) => r.id !== id)); }
@@ -78,6 +93,10 @@ export default function ReturnToSupplier() {
         {success && <div className="bg-green-50 border border-green-300 text-green-700 rounded-xl px-4 py-3 text-sm">{success}</div>}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          <datalist id="mat-options">
+            {materials.map((m) => <option key={m.id} value={m.description} />)}
+          </datalist>
+
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
             <label className="block text-xs font-semibold text-slate-600 mb-1">Return Date</label>
             <input type="date" required value={returnDate} onChange={(e) => setReturnDate(e.target.value)}
@@ -106,8 +125,8 @@ export default function ReturnToSupplier() {
                     <tr key={row.id} className="hover:bg-slate-50">
                       <td className="border border-slate-200 px-2 py-1 text-center text-xs text-slate-500 font-semibold">{idx + 1}</td>
                       <td className="border border-slate-200 px-1 py-1">
-                        <input type="text" placeholder="Item name" value={row.itemName}
-                          onChange={(e) => updateRow(row.id, "itemName", e.target.value)} className={inputCls} />
+                        <input type="text" list="mat-options" placeholder="Item name" value={row.itemName}
+                          onChange={(e) => onItemChange(row.id, e.target.value)} className={inputCls} />
                       </td>
                       <td className="border border-slate-200 px-1 py-1">
                         <input type="number" min="0" step="0.01" placeholder="0" value={row.quantity}

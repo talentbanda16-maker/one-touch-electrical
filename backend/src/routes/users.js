@@ -72,6 +72,31 @@ router.get("/technical-managers", requireAuth, async (_req, res) => {
   res.json(managers);
 });
 
+// People the TM can assign to a site visit on the workspace calendar —
+// engineers and the QS (the ones who actually go on site), not the TM.
+// Open to any signed-in user (same as technical-managers).
+router.get("/engineers", requireAuth, async (_req, res) => {
+  const engineers = await prisma.user.findMany({
+    where: { role: { in: ["ENGINEER", "QS"] }, isActive: true },
+    select: { id: true, name: true, role: true },
+    orderBy: { name: "asc" },
+  });
+  res.json(engineers);
+});
+
+// Site visits booked FOR the signed-in user (their "My Site Visits" list).
+router.get("/me/site-visits", requireAuth, async (req, res) => {
+  const visits = await prisma.siteVisit.findMany({
+    where: { assignedToId: req.user.id },
+    include: {
+      project: { select: { id: true, name: true, code: true } },
+      createdBy: { select: { id: true, name: true } },
+    },
+    orderBy: { date: "asc" },
+  });
+  res.json(visits);
+});
+
 router.get("/", requireAuth, requireRole(), async (_req, res) => {
   const users = await prisma.user.findMany({
     select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },

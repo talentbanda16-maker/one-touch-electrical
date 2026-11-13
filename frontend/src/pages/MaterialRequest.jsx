@@ -19,9 +19,24 @@ export default function MaterialRequest() {
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Materials database for this project — powers the Item autocomplete.
+  const [materials, setMaterials] = useState([]);
+  useEffect(() => {
+    if (!projectId) return;
+    api.get(`/projects/${projectId}/materials`).then(setMaterials).catch(() => {});
+  }, [projectId]);
 
   function updateRow(id, field, val) {
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: val } : r)));
+  }
+
+  // When the Item matches a material from the database, auto-fill unit + qty.
+  function onItemChange(id, val) {
+    setRows((rs) => rs.map((r) => {
+      if (r.id !== id) return r;
+      const m = materials.find((x) => x.description === val);
+      return { ...r, itemName: val, unit: m && m.unit ? m.unit : r.unit, quantity: m && m.quantity != null ? String(m.quantity) : r.quantity };
+    }));
   }
 
   function addRow() {
@@ -86,6 +101,11 @@ export default function MaterialRequest() {
             <div className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm bg-slate-50 text-slate-700">{user?.name}</div>
           </div>
 
+          {/* Autocomplete source for the Item fields — materials database */}
+          <datalist id="mat-options">
+            {materials.map((m) => <option key={m.id} value={m.description} />)}
+          </datalist>
+
           {/* Table */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-100">
@@ -113,9 +133,10 @@ export default function MaterialRequest() {
                       <td className="border border-slate-200 px-1 py-1">
                         <input
                           type="text"
+                          list="mat-options"
                           placeholder="Item name"
                           value={row.itemName}
-                          onChange={(e) => updateRow(row.id, "itemName", e.target.value)}
+                          onChange={(e) => onItemChange(row.id, e.target.value)}
                           className={inputCls}
                         />
                       </td>

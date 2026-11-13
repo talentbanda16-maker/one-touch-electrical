@@ -152,16 +152,22 @@ export default function ProjectKpis() {
                     </div>
                   )}
                   {k.pendingReqs > 0 && (
-                    <div className="bg-amber-50 rounded-lg p-2">
+                    <button
+                      onClick={() => navigate(`/analytics/stores?projectId=${k.id}&status=PENDING`)}
+                      className="bg-amber-50 rounded-lg p-2 text-left hover:bg-amber-100 transition-colors cursor-pointer w-full"
+                    >
                       <p className="text-amber-600">Pending reqs</p>
-                      <p className="font-bold text-amber-900 text-sm">{k.pendingReqs}</p>
-                    </div>
+                      <p className="font-bold text-amber-900 text-sm">{k.pendingReqs} →</p>
+                    </button>
                   )}
                   {k.openActions > 0 && (
-                    <div className="bg-slate-50 rounded-lg p-2">
+                    <button
+                      onClick={() => navigate(`/actions?projectId=${k.id}`)}
+                      className="bg-slate-50 rounded-lg p-2 text-left hover:bg-slate-100 transition-colors cursor-pointer w-full"
+                    >
                       <p className="text-slate-500">Open actions</p>
-                      <p className="font-bold text-slate-900 text-sm">{k.openActions}</p>
-                    </div>
+                      <p className="font-bold text-slate-900 text-sm">{k.openActions} →</p>
+                    </button>
                   )}
                 </div>
               </div>
